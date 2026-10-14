@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>Monster Mash Kitchen</title>
-<!-- Monster Mash Kitchen v0.1.0 (Apache-2.0), by MV2 of Munim, Inc., made with AI agents. Built on html-jam-kit: one self-contained HTML file. -->
+<!-- Monster Mash Kitchen v0.2.0 (Apache-2.0), by MV2 of Munim, Inc., made with AI agents. Built on html-jam-kit: one self-contained HTML file.
+     On RUN, the RUN build loads RUN's SDK first (window.RundotGameAPI) for saves, sharing, an optional rewarded ad and a daily reminder; anywhere else the game runs on its own. -->
 <style>
 html,body{margin:0;height:100%;overflow:hidden;background:#1c1433;touch-action:none;user-select:none;-webkit-user-select:none}
 canvas{display:block;position:absolute}
@@ -43,7 +44,7 @@ const ING=[
  {id:"stardust",name:"Stardust",icon:"✨",s:0,c:2,gd:0,clue:"twinkles",pre:"Twinkle",suf:"sparkle",col:"#ffd84a",feat:"sparkles",price:120}
 ];
 const BASE=8,STATS=["S","C","G"],STAT_NAME={S:"Spooky",C:"Cute",G:"Gooey"},STAT_ICON={S:"👻",C:"💗",G:"💧"};
-const PERFECT_BONUS=30;
+const PERFECT_BONUS=30,FRIEND_BONUS=25;
 const PAIRS=[];for(let i=0;i<ING.length;i++)for(let j=i+1;j<ING.length;j++)PAIRS.push([i,j]);
 
 const pairKey=(i,j)=>Math.min(i,j)+"-"+Math.max(i,j);
@@ -56,6 +57,12 @@ function monster(i,j){
   const top=STATS.reduce((m,k)=>st[k]>st[m]?k:m,"S");
   return {key:pairKey(i,j),i:lo,j:hi,name:a.pre+b.suf,st,top,eyes:1+(lo+hi*2)%3,body:lo%3,
     bio:"Mashed from "+a.name.toLowerCase()+" and "+b.name.toLowerCase()+". "+QUIRK[top][(lo*3+hi)%3]};
+}
+// a monster from its key ("3-7"), as carried by a friend's share link; null unless it is a real pair
+function monsterFromKey(key){
+  const m=/^(\d)-(\d)$/.exec(String(key==null?"":key));if(!m)return null;
+  const i=+m[1],j=+m[2];
+  return i<j&&j<ING.length?monster(i,j):null;
 }
 
 // what customers ask for: a range for some stats ([lowest, highest]); "surprise" wants a monster not yet in the book
@@ -85,6 +92,8 @@ function needText(o){
 function orderMiss(o,st){let m=0;for(const k of Object.keys(o.need)){const [lo,hi]=o.need[k];m+=Math.max(0,lo-st[k])+Math.max(0,st[k]-hi);}return m;}
 function stars(o,m,isNew){return o.isNew?(isNew?3:1):Math.max(0,3-orderMiss(o,m.st));}
 function coinsFor(st,isNew,moon){return st*5+(isNew?10:0)+(moon?50:0);}
+// the Moon Recipe pays 10 more for each day of the streak after the first, up to 70
+function streakBonus(n){return Math.min(70,10*Math.max(0,(n|0)-1));}
 // the six orders of night n: night 1 teaches, later nights draw from every order
 function nightOrders(n,canSurprise){
   if(n<=1)return FIRST_NIGHT.slice();
@@ -126,8 +135,11 @@ function selfTestLogic(){
     for(const k of STATS)if(!(m.st[k]>=1&&m.st[k]<=5))problems.push(w+": "+k+" is "+m.st[k]);
     if(!m.bio||m.bio.length>90)problems.push(w+": bio is "+m.bio.length+" characters");
     if(!(m.eyes>=1&&m.eyes<=3)||!(m.body>=0&&m.body<=2))problems.push(w+": bad look");
+    const back=monsterFromKey(m.key);
+    if(!back||back.name!==m.name)problems.push(w+": its key "+m.key+" does not lead back to it");
   }
   if(names.size!==45)problems.push("expected 45 monster names, found "+names.size);
+  for(const bad of ["1-0","3-3","3-12","0-10","x","",null,undefined,"0-1 "])if(monsterFromKey(bad))problems.push("the key "+JSON.stringify(bad)+" should not be a monster");
   if(new Set(ORDERS.map(o=>o.id)).size!==ORDERS.length)problems.push("two orders share an id");
   for(const o of ORDERS){
     if(!needText(o))problems.push("order "+o.id+": no needs line");
@@ -170,6 +182,7 @@ function selfTestLogic(){
   if(S({date:"2026-10-12",streak:4},"2026-10-14")!==JSON.stringify({date:"2026-10-14",streak:1}))problems.push("missed-day streak");
   if(S({date:"2026-10-31",streak:2},"2026-11-01")!==JSON.stringify({date:"2026-11-01",streak:3}))problems.push("month-end streak");
   if(coinsFor(3,true,false)!==25||coinsFor(0,false,false)!==0||coinsFor(2,false,true)!==60)problems.push("coin rewards");
+  if(streakBonus(1)!==0||streakBonus(2)!==10||streakBonus(8)!==70||streakBonus(30)!==70||streakBonus(0)!==0)problems.push("streak bonus");
   const pr=SKINS.map(s=>s.price);
   if(pr[0]!==0||pr.some((p,k)=>k&&p<=pr[k-1]))problems.push("cauldron prices should start free and rise");
   return problems;
@@ -192,8 +205,9 @@ function fit(){
 const BTN={sound:{x:556,y:16,w:148,h:56},book:{x:24,y:858,w:180,h:84},mash:{x:224,y:848,w:272,h:104},shop:{x:516,y:858,w:180,h:84}};
 const SLOT=[{x:262,y:548},{x:458,y:548}];       // the two picked ingredients float over the cauldron
 function cardRect(i){return {x:20+(i%5)*136,y:968+Math.floor(i/5)*140,w:128,h:130};}
-const RESULT_BOX={x:36,y:130,w:648,h:1010},RESULT_BTN={x:160,y:1040,w:400,h:84};
-const NIGHT_BOX={x:70,y:300,w:580,h:640},NIGHT_BTN={x:160,y:830,w:400,h:84};
+const RESULT_BOX={x:36,y:130,w:648,h:1010},RESULT_BTN={x:160,y:1046,w:400,h:80};
+const RESULT_BTN_SHARE={x:56,y:1046,w:388,h:80},SHARE_BTN={x:460,y:1046,w:204,h:80};
+const NIGHT_BOX={x:70,y:300,w:580,h:640},NIGHT_BTN={x:160,y:830,w:400,h:84},NIGHT_AD={x:160,y:744,w:400,h:72};
 const BOOK_BOX={x:20,y:40,w:680,h:1200},BOOK_CLOSE={x:530,y:58,w:156,h:64};
 function bookSlot(q){return {x:36+(q%5)*130,y:206+Math.floor(q/5)*112,w:122,h:104};}
 const SHOP_BOX={x:40,y:150,w:640,h:930},SHOP_CLOSE={x:240,y:984,w:240,h:72};
@@ -202,24 +216,39 @@ function shopBtn(q){const r=shopRow(q);return {x:r.x+r.w-176,y:r.y+18,w:162,h:70
 const CUSTOMERS=[{icon:"👻",name:"a kid in a sheet"},{icon:"🧛",name:"a tiny vampire"},{icon:"🧙",name:"the witch next door"},{icon:"🧟",name:"Grandpa Zombie"},
   {icon:"🦸",name:"a superhero"},{icon:"🧚",name:"a fairy"},{icon:"🤡",name:"a clown"},{icon:"🐱",name:"a cat in a cat costume"}];
 
-// ---------- progress: saved in this browser only ----------
-const SAVE_KEY="monstermash.v1";
-const coverMode=location.hash==="#cover";
+// ---------- RUN: the RUN build loads RUN's SDK before this script; anywhere else RUN stays null ----------
+const RUN=window.RundotGameAPI||null;
+// every SDK call can throw or reject: each one goes through sdk() and gets a .catch, so none can break the game
+function sdk(fn){try{const p=fn();return p&&typeof p.then==="function"?p:Promise.resolve(p);}catch(e){return Promise.reject(e);}}
+const has=(o,f)=>!!(o&&typeof o[f]==="function");
+
+// ---------- progress: this browser's storage, and RUN's player storage on RUN ----------
+const SAVE_KEY="monstermash.v1",RUN_KEY="monstermash_v1";   // RUN storage keys may not contain a dot
+const coverMode=location.hash==="#cover",testMode=location.hash==="#selftest";
 let demo=location.hash==="#demo",noSave=demo,save=load();
-function fresh(){return {night:1,k:0,orders:nightOrders(1,true),tonight:0,coins:0,ing:BASE,book:{},skins:["swamp"],skin:"swamp",daily:{date:"",streak:0},moonFound:"",mute:false};}
-function load(){
+let ready=!RUN||demo||coverMode||testMode;     // on RUN, input waits (at most 4 s) for the saved kitchen
+let runLoaded=!RUN;                            // and nothing is written to RUN until it has been read
+function fresh(){return {night:1,k:0,orders:nightOrders(1,true),tonight:0,nightCoins:0,coins:0,ing:BASE,book:{},skins:["swamp"],skin:"swamp",daily:{date:"",streak:0},moonFound:"",invite:"",adNight:0,mute:false};}
+function parseSave(raw){
   const f=fresh();
   try{
-    const s=JSON.parse(localStorage.getItem(SAVE_KEY)||"null");if(!s||typeof s!=="object")return f;
+    const s=JSON.parse(raw||"null");if(!s||typeof s!=="object")return f;
     const night=Math.max(1,s.night|0);
     const orders=Array.isArray(s.orders)&&s.orders.length===6&&s.orders.every(id=>ORDER[id])?s.orders:nightOrders(night,true);
     const skins=Array.isArray(s.skins)?s.skins.filter(id=>SKIN[id]):[];if(!skins.includes("swamp"))skins.unshift("swamp");
-    return {night,k:clamp(s.k|0,0,6),orders,tonight:Math.max(0,s.tonight|0),coins:Math.max(0,s.coins|0),ing:clamp(s.ing|0,BASE,ING.length),
+    return {night,k:clamp(s.k|0,0,6),orders,tonight:Math.max(0,s.tonight|0),nightCoins:Math.max(0,s.nightCoins|0),coins:Math.max(0,s.coins|0),ing:clamp(s.ing|0,BASE,ING.length),
       book:s.book&&typeof s.book==="object"?s.book:{},skins,skin:skins.includes(s.skin)?s.skin:"swamp",
-      daily:s.daily&&s.daily.date?s.daily:f.daily,moonFound:String(s.moonFound||""),mute:!!s.mute};
+      daily:s.daily&&s.daily.date?s.daily:f.daily,moonFound:String(s.moonFound||""),invite:monsterFromKey(s.invite)?String(s.invite):"",
+      adNight:Math.max(0,s.adNight|0),mute:!!s.mute};
   }catch(e){return f;}
 }
-function store(){if(noSave)return;try{localStorage.setItem(SAVE_KEY,JSON.stringify(save));}catch(e){}}
+function load(){try{return parseSave(localStorage.getItem(SAVE_KEY));}catch(e){return fresh();}}
+function store(){
+  if(noSave)return;
+  const s=JSON.stringify(save);
+  try{localStorage.setItem(SAVE_KEY,s);}catch(e){}
+  if(RUN&&runLoaded&&RUN.appStorage)sdk(()=>RUN.appStorage.setItem(RUN_KEY,s)).catch(()=>{});
+}
 function today(){const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");}
 function untilMidnight(){const n=new Date(),m=new Date(n.getFullYear(),n.getMonth(),n.getDate()+1),s=Math.max(0,Math.floor((m-n)/1000));return Math.floor(s/3600)+"h "+String(Math.floor(s/60)%60).padStart(2,"0")+"m";}
 const discovered=()=>Object.keys(save.book).length;
@@ -258,9 +287,10 @@ const sfx={
 // ---------- game state ----------
 const now=()=>performance.now()/1000;
 let phase="kitchen",overlay=null,picked=[],mashAt=0,result=null,resultAt=0,bookSel=null,mouse=null,parts=[],demoNext=0,toast="",toastUntil=0;
+let adReady=false,adBusy=false,shareBusy=false;
 const orderNow=()=>ORDER[save.orders[Math.min(save.k,5)]];
 const customerNow=()=>CUSTOMERS[(save.night*6+save.k)%CUSTOMERS.length];
-function say(text){toast=text;toastUntil=now()+2.5;}
+function say(text,secs){toast=text;toastUntil=now()+(secs||2.5);}
 
 function pick(i){
   if(phase!=="kitchen"||overlay||i<0||i>=ING.length)return;
@@ -279,29 +309,30 @@ function mash(){
 function resolve(){
   const m=monster(picked[0],picked[1]),o=orderNow(),who=customerNow(),d=today();
   const isNew=!save.book[m.key],full=discovered()>=pairsOpen(),mp=moonPair(d);
-  const moon=save.moonFound!==d&&m.i===mp[0]&&m.j===mp[1];
+  const moon=save.moonFound!==d&&m.i===mp[0]&&m.j===mp[1],friend=save.invite===m.key;
   const st=stars(o,m,isNew||full);
-  let coins=coinsFor(st,isNew,moon);
+  let coins=coinsFor(st,isNew,moon),streak=0;
   const e=save.book[m.key]||{n:0,moon:false};e.n++;if(moon)e.moon=true;save.book[m.key]=e;
-  if(moon){save.moonFound=d;save.daily=nextStreak(save.daily,d);}
+  if(moon){save.moonFound=d;save.daily=nextStreak(save.daily,d);streak=streakBonus(save.daily.streak);coins+=streak;}
+  if(friend){coins+=FRIEND_BONUS;save.invite="";}
   save.tonight+=st;save.k++;
   const perfect=save.k>=6&&save.tonight>=18;
   if(perfect)coins+=PERFECT_BONUS;
-  save.coins+=coins;
+  save.coins+=coins;save.nightCoins=(save.nightCoins|0)+coins;
   store();
-  result={m,o,who,isNew,moon,stars:st,coins,perfect};resultAt=now();phase="result";picked=[];
-  sfx.pop();sfx.stars(st);if(moon)sfx.moon();
+  result={m,o,who,isNew,moon,friend,streak,stars:st,coins,perfect};resultAt=now();phase="result";picked=[];
+  sfx.pop();sfx.stars(st);if(moon){sfx.moon();remindMoon();}
   burst(360,620,[ING[m.i].col,ING[m.j].col,"#ffd84a"],st===3?40:16);
 }
 function next(){
   if(phase!=="result"||now()<resultAt+0.5)return;
   phase=save.k>=6?"night":"kitchen";result=null;
-  if(phase==="night"&&save.tonight>=18)sfx.coin();
+  if(phase==="night"){if(save.tonight>=18)sfx.coin();checkAd();}
 }
 function startNight(){
   if(phase!=="night")return;
-  save.night++;save.k=0;save.tonight=0;save.orders=nightOrders(save.night,discovered()<pairsOpen());
-  store();phase="kitchen";picked=[];
+  save.night++;save.k=0;save.tonight=0;save.nightCoins=0;save.orders=nightOrders(save.night,discovered()<pairsOpen());
+  store();phase="kitchen";picked=[];adReady=false;
   say("Night "+save.night+". The kitchen is open!");
 }
 function shopItems(){return [{kind:"ing",i:8},{kind:"ing",i:9}].concat(SKINS.map(s=>({kind:"skin",id:s.id})));}
@@ -321,11 +352,69 @@ function buy(it){
   return true;
 }
 
+// ---------- RUN extras: the saved kitchen, a friend's monster, sharing, an optional ad, a daily reminder ----------
+function applySave(){
+  if(save.mute===audio.isOn())audio.toggle();
+  phase=save.k>=6?"night":"kitchen";picked=[];overlay=null;result=null;
+  if(phase==="night")checkAd();
+}
+function startRun(){
+  const finish=raw=>{
+    if(runLoaded)return;
+    runLoaded=true;
+    if(raw){save=parseSave(raw);applySave();}
+    ready=true;readInvite();
+  };
+  setTimeout(()=>{if(!ready){ready=true;say("Still fetching your saved kitchen…",4);}},4000);
+  sdk(()=>RUN.appStorage.getItem(RUN_KEY)).then(finish,()=>finish(null));
+}
+// a friend's share link carries one monster; making it pays a bonus
+function readInvite(){
+  if(!has(RUN&&RUN.app,"resolveLaunchIntent"))return;
+  sdk(()=>RUN.app.resolveLaunchIntent({maxWaitMs:800})).then(intent=>{
+    const m=intent&&intent.kind==="share"&&intent.params?monsterFromKey(intent.params.monster):null;
+    if(!m)return;
+    save.invite=m.key;store();
+    say("A friend sent you "+m.name+"! Mash it for +"+FRIEND_BONUS+" 🪙",5);
+  }).catch(()=>{});
+}
+const canShare=()=>has(RUN&&RUN.social,"shareLinkAsync");
+const resultBtn=()=>canShare()?RESULT_BTN_SHARE:RESULT_BTN;
+function shareMonster(m){
+  if(!canShare()||shareBusy||!m)return;
+  shareBusy=true;
+  sdk(()=>RUN.social.shareLinkAsync({shareParams:{monster:m.key},slug:m.name,
+    metadata:{title:"I mashed "+m.name+" in Monster Mash Kitchen!",description:"Two ingredients, one cauldron, 45 monsters. Can you make this one?"}}))
+    .then(()=>say("Your monster is ready to share!"),()=>say("Sharing didn't work this time."))
+    .then(()=>{shareBusy=false;});
+}
+// an optional rewarded ad at the end of a night doubles that night's coins, once a night
+const adOffer=()=>phase==="night"&&adReady&&!adBusy&&save.adNight!==save.night&&save.nightCoins>0;
+function checkAd(){
+  adReady=false;
+  if(demo||!has(RUN&&RUN.ads,"isRewardedAdReadyAsync"))return;
+  sdk(()=>RUN.ads.isRewardedAdReadyAsync()).then(ok=>{adReady=ok===true;},()=>{});
+}
+function watchAd(){
+  if(!adOffer())return;
+  adBusy=true;
+  sdk(()=>RUN.ads.showRewardedAdAsync({adDisplayId:"night_bonus",adDisplayName:"Double tonight's coins"})).then(earned=>{
+    if(earned===true&&save.adNight!==save.night){const c=save.nightCoins;save.coins+=c;save.adNight=save.night;store();sfx.coin();say("Tonight's coins doubled: +"+c+" 🪙");}
+  },()=>{}).then(()=>{adBusy=false;});
+}
+// after today's Moon Recipe is found: a reminder tomorrow at 6 pm, when a new one has risen
+function remindMoon(){
+  if(noSave||!has(RUN&&RUN.notifications,"submitMessageAsync"))return;
+  const n=new Date(),at=new Date(n.getFullYear(),n.getMonth(),n.getDate()+1,18,0,0),days=save.daily.streak|0;
+  sdk(()=>RUN.notifications.submitMessageAsync({channels:["local"],title:"A new Moon Recipe has risen 🌙",
+    body:"Find it to keep your "+days+"-day streak glowing.",triggerAt:at.toISOString(),notificationId:"moon-recipe"})).catch(()=>{});
+}
+
 // ---------- input: mouse, touch and pen through pointer events, plus keys ----------
 const inside=(b,x,y)=>x>=b.x&&y>=b.y&&x<b.x+b.w&&y<b.y+b.h;
 function toLogical(e){return [(e.clientX-view.ox)/view.scale,(e.clientY-view.oy)/view.scale];}
 function press(x,y){
-  if(demo)return;
+  if(demo||!ready)return;
   if(overlay==="book"){
     if(inside(BOOK_CLOSE,x,y)||!inside(BOOK_BOX,x,y)){overlay=null;return;}
     for(let q=0;q<PAIRS.length;q++)if(inside(bookSlot(q),x,y)){bookSel=q;audio.tone(660,0.06,"sine",0.03);return;}
@@ -338,8 +427,12 @@ function press(x,y){
     return;
   }
   if(inside(BTN.sound,x,y)){audio.toggle();save.mute=!audio.isOn();store();return;}
-  if(phase==="result"){if(inside(RESULT_BTN,x,y))next();return;}
-  if(phase==="night"){if(inside(NIGHT_BTN,x,y))startNight();return;}
+  if(phase==="result"){
+    if(inside(resultBtn(),x,y))next();
+    else if(canShare()&&now()>=resultAt+0.5&&inside(SHARE_BTN,x,y))shareMonster(result.m);
+    return;
+  }
+  if(phase==="night"){if(inside(NIGHT_BTN,x,y))startNight();else if(adOffer()&&inside(NIGHT_AD,x,y))watchAd();return;}
   if(phase!=="kitchen")return;
   if(inside(BTN.book,x,y)){overlay="book";bookSel=null;return;}
   if(inside(BTN.shop,x,y)){overlay="shop";return;}
@@ -353,7 +446,7 @@ addEventListener("contextmenu",e=>{if(!coverMode)e.preventDefault();});
 addEventListener("keydown",e=>{
   audio.unlock();
   if(e.key==="m"||e.key==="M"){audio.toggle();save.mute=!audio.isOn();store();return;}
-  if(demo)return;
+  if(demo||!ready)return;
   const k=e.key;
   if(k===" "||k==="Enter")e.preventDefault();
   if(overlay){if(k==="b"||k==="B"||k==="s"||k==="S"||k==="Enter")overlay=null;return;}
@@ -511,17 +604,22 @@ function drawKitchen(t){
   }
   drawButton(BTN.book,"📖 Book",false,26);
   drawButton(BTN.shop,"🛒 Shop",false,26);
-  const ready=picked.length===2&&phase==="kitchen";
-  drawButton(BTN.mash,phase==="mashing"?"Mashing…":ready?"MASH!":"Pick 2",ready,ready?44:32);
+  const armed=picked.length===2&&phase==="kitchen";
+  drawButton(BTN.mash,phase==="mashing"?"Mashing…":armed?"MASH!":"Pick 2",armed,armed?44:32);
   for(let i=0;i<ING.length;i++)drawCard(i,t);
-  // the first customer of the first night: a ring shows what to tap
+  // the first customer of the first night: a ring shows what to tap; later, a friend's monster gets a hint line
+  let hint="";
   if(save.night===1&&save.k===0&&phase==="kitchen"&&!overlay&&!demo){
     const b=bestPair(orderNow(),save.ing,save.book).pair,p=0.5+0.5*Math.sin(t*6);
     const tgt=picked.length===2?(Math.min(...picked)===b[0]&&Math.max(...picked)===b[1]?[BTN.mash]:[]):b.filter(i=>!picked.includes(i)).map(cardRect);
     g.strokeStyle="rgba(255,216,74,"+(0.5+0.5*p).toFixed(3)+")";g.lineWidth=6;
     for(const r of tgt){rr(r.x-6,r.y-6,r.w+12,r.h+12,20);g.stroke();}
-    if(!(toast&&t<toastUntil)){g.fillStyle="#ffe9a8";g.font="600 22px system-ui,sans-serif";centre("Tap two ingredients, then MASH! Match the order.",360,468);}
+    hint="Tap two ingredients, then MASH! Match the order.";
+  }else if(save.invite&&phase==="kitchen"){
+    const m=monsterFromKey(save.invite);
+    if(m)hint="✉️ A friend's "+m.name+" is waiting: "+ING[m.i].name+" + ?";
   }
+  if(hint&&!(toast&&t<toastUntil)){g.fillStyle="#ffe9a8";g.font="600 22px system-ui,sans-serif";centre(hint,360,468);}
   g.fillStyle="#9c8cc0";g.font="15px system-ui,sans-serif";centre("Made by MV2 of Munim, Inc. with AI agents",360,1262);
 }
 function drawToast(){g.fillStyle="#ffe9a8";g.font="600 22px system-ui,sans-serif";centre(toast,360,468);}
@@ -530,23 +628,26 @@ const VERDICT=["Not what they asked for.","Close-ish. They take it anyway.","Nea
 function drawResult(t){
   const r=result,b=RESULT_BOX,cx=360,k=Math.min(1,(t-resultAt)/0.35);
   dim();g.fillStyle="#fff8ee";rr(b.x,b.y,b.w,b.h,26);g.fill();
-  g.fillStyle="#5a2d8a";g.font="bold 40px system-ui,sans-serif";centre(r.moon?"🌙 A moonlit monster!":r.isNew?"New monster!":"Monster made",cx,b.y+60);
-  drawMonster(r.m,cx,b.y+290,140*easeOut(k)+1,t,{moon:r.moon});
-  g.fillStyle="#2a1f3a";g.font="bold 46px system-ui,sans-serif";centre((r.moon?"Moonlit ":"")+r.m.name,cx,b.y+480);
+  g.fillStyle="#5a2d8a";g.font="bold 40px system-ui,sans-serif";centre(r.moon?"🌙 A moonlit monster!":r.friend?"✉️ Your friend's monster!":r.isNew?"New monster!":"Monster made",cx,b.y+60);
+  drawMonster(r.m,cx,b.y+280,140*easeOut(k)+1,t,{moon:r.moon});
+  g.fillStyle="#2a1f3a";g.font="bold 46px system-ui,sans-serif";centre((r.moon?"Moonlit ":"")+r.m.name,cx,b.y+466);
   g.fillStyle="#5a4a6a";g.font="24px system-ui,sans-serif";
-  wrap(r.m.bio,560).slice(0,2).forEach((l,q)=>centre(l,cx,b.y+526+q*32));
+  wrap(r.m.bio,560).slice(0,2).forEach((l,q)=>centre(l,cx,b.y+510+q*32));
   STATS.forEach((s,q)=>{
-    const y=b.y+620+q*48;
+    const y=b.y+598+q*46;
     g.textAlign="left";g.fillStyle="#2a1f3a";g.font="600 26px system-ui,sans-serif";g.textBaseline="middle";g.fillText(STAT_ICON[s]+" "+STAT_NAME[s],b.x+90,y);g.textBaseline="alphabetic";
     for(let p=0;p<5;p++){g.fillStyle=p<r.m.st[s]?["#9b6bff","#ff6fae","#4fc83a"][q]:"#e2d8ee";g.beginPath();g.arc(b.x+330+p*44,y,15,0,7);g.fill();}
   });
-  g.fillStyle="#ffffff";g.font="48px system-ui,sans-serif";centre(r.who.icon,b.x+92,b.y+800);
-  drawStars(cx+30,b.y+796,r.stars,24);
-  g.fillStyle="#2a1f3a";g.font="600 26px system-ui,sans-serif";centre(VERDICT[r.stars],cx,b.y+862);
+  g.fillStyle="#ffffff";g.font="48px system-ui,sans-serif";centre(r.who.icon,b.x+92,b.y+770);
+  drawStars(cx+30,b.y+766,r.stars,24);
+  g.fillStyle="#2a1f3a";g.font="600 26px system-ui,sans-serif";centre(VERDICT[r.stars],cx,b.y+828);
   g.fillStyle="#9a6f00";g.font="bold 24px system-ui,sans-serif";
-  centre("+"+r.coins+" 🪙"+(r.isNew?"  ·  new monster +10":"")+(r.moon?"  ·  moon +50":""),cx,b.y+904);
-  if(r.perfect){g.fillStyle="#5a2d8a";g.font="600 22px system-ui,sans-serif";centre("Perfect night! +"+PERFECT_BONUS+" coins included",cx,b.y+940);}
-  if(t>=resultAt+0.5)drawButton(RESULT_BTN,save.k>=6?"Close the kitchen":"Next customer ▶",true,30);
+  centre("+"+r.coins+" 🪙"+(r.isNew?"  ·  new +10":"")+(r.moon?"  ·  moon +"+(50+r.streak):"")+(r.friend?"  ·  friend +"+FRIEND_BONUS:""),cx,b.y+870);
+  if(r.perfect){g.fillStyle="#5a2d8a";g.font="600 22px system-ui,sans-serif";centre("Perfect night! +"+PERFECT_BONUS+" coins included",cx,b.y+902);}
+  if(t>=resultAt+0.5){
+    drawButton(resultBtn(),save.k>=6?"Close the kitchen":"Next customer ▶",true,30);
+    if(canShare())drawButton(SHARE_BTN,"🔗 Share",false,26);
+  }
 }
 function drawNight(){
   const b=NIGHT_BOX,cx=360,d=today();
@@ -560,7 +661,8 @@ function drawNight(){
   g.font="22px system-ui,sans-serif";
   if(save.moonFound===d)centre("🌙 Today's Moon Recipe: found!",cx,b.y+362);
   else{centre("🌙 Today's Moon Recipe is still hidden:",cx,b.y+352);centre(moonClue(d),cx,b.y+384);}
-  g.fillStyle="#7a6a8a";g.font="20px system-ui,sans-serif";centre("A new Moon Recipe rises every day.",cx,b.y+430);
+  g.fillStyle="#7a6a8a";g.font="20px system-ui,sans-serif";centre("A new Moon Recipe rises every day.",cx,b.y+424);
+  if(adOffer())drawButton(NIGHT_AD,"▶ Watch an ad: +"+save.nightCoins+" 🪙",false,24);
   drawButton(NIGHT_BTN,"Next night ▶",true,30);
 }
 function drawBook(t){
@@ -621,6 +723,7 @@ function draw(t,dt){
   else if(phase==="night")drawNight();
   if(overlay==="book")drawBook(t);
   else if(overlay==="shop")drawShop();
+  if(!ready){dim();g.fillStyle="#f3e9ff";g.font="600 32px system-ui,sans-serif";centre("Opening the kitchen…",W/2,H/2);}
 }
 // #demo: serves customers by itself for store videos; it never saves
 function demoStep(t){
@@ -681,14 +784,19 @@ function selfTest(){
         resultAt=-10;next();
       }
       if(phase!=="night"||save.tonight!==18)problems.push("page: night "+night+" ended with "+save.tonight+" stars");
+      if(save.nightCoins<=0)problems.push("page: night "+night+" counted no coins");
       draw(now(),0.1);
       startNight();
-      if(save.night!==night+1||phase!=="kitchen")problems.push("page: night "+(night+1)+" did not start");
+      if(save.night!==night+1||phase!=="kitchen"||save.nightCoins!==0)problems.push("page: night "+(night+1)+" did not start");
     }
     save.coins+=1000;overlay="shop";draw(now(),0.016);
     for(const it of shopItems())buy(it);
     if(save.ing!==10||save.skin!=="gold")problems.push("page: the shop did not sell everything");
     overlay="book";bookSel=0;draw(now(),0.016);bookSel=44;draw(now(),0.016);overlay=null;
+    // a friend's monster pays its bonus once
+    save.invite="2-5";picked=[];pick(2);pick(5);mash();resolve();
+    if(!result.friend||save.invite!==""||result.coins<FRIEND_BONUS)problems.push("page: the friend's monster paid nothing");
+    draw(now()+1,0.1);resultAt=-10;next();
     save.moonFound="";save.daily={date:"",streak:0};
     const mp=moonPair(today());picked=[];pick(mp[0]);pick(mp[1]);mash();resolve();
     if(!result.moon||save.daily.streak!==1)problems.push("page: the Moon Recipe was not found");
@@ -706,7 +814,7 @@ if(save.mute)audio.toggle();
 phase=save.k>=6?"night":"kitchen";
 if(location.hash==="#selftest"){
   const r=selfTest(),box=document.getElementById("test");box.hidden=false;
-  box.textContent=`Monster Mash Kitchen self-test (v0.1.0): ${r.ms} ms.\n`+(r.problems.length?`${r.problems.length} problem(s):\n`+r.problems.slice(0,40).join("\n"):"No problems found.")+"\n\nClick to close.";
+  box.textContent=`Monster Mash Kitchen self-test (v0.2.0): ${r.ms} ms.\n`+(r.problems.length?`${r.problems.length} problem(s):\n`+r.problems.slice(0,40).join("\n"):"No problems found.")+"\n\nClick to close.";
   box.onclick=()=>{box.hidden=true;location.hash="";};
   console.log("self-test:",r.problems.length,"problems",r.problems);
 }else if(coverMode){
@@ -717,6 +825,8 @@ if(location.hash==="#selftest"){
     const img=document.createElement("img");img.alt=name;img.src=renderCover(w,h);box.appendChild(img);
   }
 }
+if(!ready)startRun();
+else if(phase==="night")checkAd();
 requestAnimationFrame(frame);
 </script>
 </body>

@@ -2,8 +2,9 @@
 
 Static checks always run. With Node.js installed, the rules block (<script id="logic">) runs and
 selfTestLogic() must return no problems, and the whole page runs against a stub browser (a canvas that
-rejects NaN and negative radii, pointer and key events, localStorage, a fake clock) in four modes:
-#selftest, normal play, #demo and #cover.
+rejects NaN and negative radii, pointer and key events, localStorage, a fake clock) in five modes:
+#selftest, normal play, #demo, #cover, and normal play on RUN with a fake RUN SDK (saved kitchen,
+a friend's share link, sharing, a rewarded ad and a reminder).
 """
 import json
 import os
@@ -74,6 +75,23 @@ Object.defineProperty(globalThis,"localStorage",{value:{getItem:k=>__ls.has(k)?_
 globalThis.AudioContext=__any;
 """
 
+# a fake RUN SDK with the calls the game uses; storage follows RUN's rules (string values, no dots in keys)
+RUN_STUB = r"""
+const __runStore=new Map([["monstermash_v1",JSON.stringify({night:4,k:0,coins:50,book:{"2-3":{n:1,moon:false}},daily:{date:"",streak:0}})]]);
+const __shares=[],__notes=[],__ads={shown:0};
+globalThis.RundotGameAPI={
+  appStorage:{
+    getItem:async k=>__runStore.has(k)?__runStore.get(k):null,
+    setItem:async(k,v)=>{if(typeof v!=="string"||String(k).includes("."))throw new Error("bad storage call");__runStore.set(k,v);}
+  },
+  app:{resolveLaunchIntent:async()=>({kind:"share",params:{monster:"0-1"}})},
+  social:{shareLinkAsync:async o=>{__shares.push(o);return {shareUrl:"link",shareLinkId:"1"};}},
+  ads:{isRewardedAdReadyAsync:async()=>true,showRewardedAdAsync:async()=>{__ads.shown++;return true;}},
+  notifications:{submitMessageAsync:async o=>{__notes.push(o);return {results:[]};}}
+};
+const __tick=()=>new Promise(r=>setTimeout(r,10));
+"""
+
 AFTER = {
     "#selftest": r"""
 __frames(3,0.016);
@@ -97,6 +115,7 @@ for(let q=0;q<6;q++){
 }
 __out.night1=phase==="night"&&__stars===18&&save.tonight===18;
 __out.coins=save.coins;
+__out.noAdOffWithoutRun=!adOffer();
 __clickL(NIGHT_BTN.x+20,NIGHT_BTN.y+20);__frames(2,0.016);
 __out.night2=phase==="kitchen"&&save.night===2&&save.k===0;
 const __s=JSON.parse(__ls.get(SAVE_KEY));__out.savedNight=__s.night;__out.savedBook=Object.keys(__s.book).length;
@@ -134,16 +153,62 @@ console.log(JSON.stringify({children:__els.covers.children.length,hidden:__els.c
 """,
 }
 
+RUN_AFTER = r"""
+(async()=>{
+const __o={};
+__o.waits=ready===false;
+__frames(2,0.016);
+{const r=cardRect(0);__clickL(r.x+20,r.y+20);__o.blocked=picked.length===0;}
+await __tick();await __tick();
+__o.ready=ready===true;
+__o.loaded=save.night===4&&save.coins===50&&!!save.book["2-3"];
+__o.invite=save.invite==="0-1";
+// the friend's monster is ingredients 1 and 2 (keys 1 and 2)
+__key("1");__key("2");__key("Enter");__frames(40,0.05);
+__o.friend=phase==="result"&&result.friend===true&&save.invite==="";
+await __tick();
+__o.savedRun=JSON.parse(__runStore.get("monstermash_v1")).book["0-1"].n===1;
+__clickL(SHARE_BTN.x+20,SHARE_BTN.y+20);await __tick();
+__o.shared=__shares.length===1&&__shares[0].shareParams.monster==="0-1";
+// serve the rest of the night
+__clickL(resultBtn().x+20,resultBtn().y+20);__frames(2,0.016);
+for(let q=1;q<6;q++){
+  const b=bestPair(orderNow(),save.ing,save.book).pair;
+  for(const i of b){const r=cardRect(i);__clickL(r.x+20,r.y+20);}
+  __clickL(BTN.mash.x+20,BTN.mash.y+20);__frames(40,0.05);
+  if(phase!=="result"){__o.stuck=phase+" at order "+(q+1);break;}
+  __clickL(resultBtn().x+20,resultBtn().y+20);__frames(2,0.016);
+}
+__o.night=phase==="night";
+await __tick();
+__o.adOffered=adOffer();
+const __c0=save.coins,__nc=save.nightCoins;
+__clickL(NIGHT_AD.x+20,NIGHT_AD.y+20);await __tick();await __tick();
+__o.adPaid=__ads.shown===1&&__nc>0&&save.coins===__c0+__nc&&!adOffer();
+// today's Moon Recipe schedules tomorrow's reminder
+__clickL(NIGHT_BTN.x+20,NIGHT_BTN.y+20);__frames(2,0.016);
+save.moonFound="";const __mp=moonPair(today());
+for(const i of __mp){const r=cardRect(i);__clickL(r.x+20,r.y+20);}
+__clickL(BTN.mash.x+20,BTN.mash.y+20);__frames(40,0.05);await __tick();
+__o.moon=phase==="result"&&result.moon===true;
+const __n=__notes[__notes.length-1];
+__o.reminder=!!__n&&__n.channels.join()==="local"&&__n.notificationId==="moon-recipe"&&!isNaN(Date.parse(__n.triggerAt));
+__o.runSaved=JSON.parse(__runStore.get("monstermash_v1")).night===5;
+console.log(JSON.stringify(__o));
+})().catch(e=>{console.log(JSON.stringify({error:String(e&&e.stack||e)}));process.exitCode=1;});
+"""
+
 
 def node(path):
     return subprocess.run(["node", path], capture_output=True, text=True, encoding="utf-8", timeout=300)
 
 
-def run_page(hash_):
+def run_page(hash_, prelude="", after=None):
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "page.js")
         with open(path, "w", encoding="utf-8") as f:
-            f.write(STUB.replace("__HASH__", json.dumps(hash_)) + LOGIC + "\n" + PAGE + "\n" + AFTER[hash_])
+            f.write(STUB.replace("__HASH__", json.dumps(hash_)) + prelude + LOGIC + "\n" + PAGE + "\n"
+                    + (AFTER[hash_] if after is None else after))
         out = node(path)
     if out.returncode != 0:
         raise AssertionError("page run %r failed:\n%s\n%s" % (hash_, out.stdout[-3000:], out.stderr[-3000:]))
@@ -161,7 +226,7 @@ class Static(unittest.TestCase):
         self.assertNotIn("https://", HTML)
 
     def test_logic_has_no_browser_code(self):
-        for name in ("document", "window", "AudioContext", "requestAnimationFrame", "localStorage"):
+        for name in ("document", "window", "AudioContext", "requestAnimationFrame", "localStorage", "RundotGameAPI"):
             self.assertIsNone(re.search(r"\b" + name + r"\b", LOGIC), name + " in the rules block")
         self.assertIn("function selfTestLogic(", LOGIC)
         self.assertRegex(LOGIC, r"\bconst W=720,H=1280;")
@@ -179,7 +244,19 @@ class Static(unittest.TestCase):
     def test_progress_is_kept(self):
         self.assertIn('SAVE_KEY="monstermash.v1"', PAGE)
         self.assertRegex(PAGE, r"localStorage\.setItem\(SAVE_KEY")
+        # RUN has no localStorage in its game frame; its storage keys may not contain a dot
+        key = re.search(r'RUN_KEY="([^"]+)"', PAGE).group(1)
+        self.assertNotIn(".", key)
+        self.assertIn("RUN.appStorage.setItem(RUN_KEY", PAGE)
         self.assertNotIn("requestFullscreen", HTML)
+
+    def test_every_run_sdk_call_is_guarded(self):
+        # RUN's docs: every SDK method can reject, and unhandled rejections crash the app
+        calls = list(re.finditer(r"RUN\.\w+\.\w+\(", PAGE))
+        self.assertGreaterEqual(len(calls), 7)
+        for m in calls:
+            self.assertEqual(PAGE[m.start() - 8:m.start()], "sdk(()=>", PAGE[m.start() - 40:m.end() + 20])
+        self.assertIn("const RUN=window.RundotGameAPI||null;", PAGE)
 
     def test_selftest_cover_and_demo_hooks(self):
         self.assertIn('location.hash==="#selftest"', PAGE)
@@ -216,17 +293,26 @@ class Node(unittest.TestCase):
         r = run_page("#selftest")
         self.assertFalse(r["hidden"])
         self.assertIn("No problems found.", r["box"], r["box"])
+        self.assertIn("(v0.2.0)", r["box"])
 
     def test_page_play(self):
         r = run_page("")
-        for key in ("lands", "muted", "unmuted", "night1", "night2", "unpick", "keyPick", "keyMash", "keyNext",
-                    "lockedOpensShop", "bought", "shopClosed", "bookOpen", "bookSel", "bookClosed", "moon",
-                    "phone", "phoneNext"):
+        for key in ("lands", "muted", "unmuted", "night1", "noAdOffWithoutRun", "night2", "unpick", "keyPick",
+                    "keyMash", "keyNext", "lockedOpensShop", "bought", "shopClosed", "bookOpen", "bookSel",
+                    "bookClosed", "moon", "phone", "phoneNext"):
             self.assertTrue(r.get(key), "%s failed: %r" % (key, r))
         self.assertNotIn("stuck", r)
         self.assertGreaterEqual(r["coins"], 180, r)
         self.assertEqual(r["savedNight"], 2, r)
         self.assertEqual(r["savedBook"], 6, r)
+
+    def test_page_on_run_with_the_sdk(self):
+        r = run_page("", prelude=RUN_STUB, after=RUN_AFTER)
+        self.assertNotIn("error", r)
+        for key in ("waits", "blocked", "ready", "loaded", "invite", "friend", "savedRun", "shared", "night",
+                    "adOffered", "adPaid", "moon", "reminder", "runSaved"):
+            self.assertTrue(r.get(key), "%s failed: %r" % (key, r))
+        self.assertNotIn("stuck", r)
 
     def test_page_demo_plays_itself_and_never_saves(self):
         r = run_page("#demo")

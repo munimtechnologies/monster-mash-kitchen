@@ -11,11 +11,30 @@ made by mashing two ingredients in a bubbling cauldron.
 - **Collect:** the Monster Book shows what you've found and silhouettes for the rest. Coins buy two more
   ingredients (17 more monsters) and new cauldrons.
 - **Moon Recipe:** one secret pair a day makes a glowing moonlit monster. The clue gives away half of it;
-  find it every day to grow a streak.
+  find it every day to grow a streak, and each day of the streak pays 10 more coins (up to +70).
 
 Made for RUN's October Jam ("Monster Mash"). Made by MV2 of Munim, Inc. with AI agents (Anthropic
 Claude): the code, art and sound are all AI-made, and there are no premade assets. The art is drawn in
-code and the sound is synthesized in the browser. Progress is saved in the browser only.
+code and the sound is synthesized in the browser.
+
+## On RUN
+
+RUN's game frame has no `localStorage`, so the RUN build loads RUN's SDK before the game
+(`window.RundotGameAPI`). When it is there, the game:
+
+- saves the kitchen to the player's RUN storage (`appStorage`), and waits up to 4 seconds for it on start;
+- adds a **Share** button to each monster card: the link carries that monster, and a friend who opens it
+  gets a hint line and +25 coins for mashing the same one;
+- offers an **optional rewarded ad** at the end of a night that doubles that night's coins, once a night,
+  only when RUN says an ad is ready;
+- after the day's Moon Recipe is found, schedules a **local reminder** for 6 pm the next day.
+
+Every SDK call is wrapped so that a failure can't stop the game. Anywhere else (a plain browser, itch.io)
+none of this appears and progress is saved in the browser.
+
+`build_run.mjs` makes the RUN build: `npm install`, then `node build_run.mjs run-dist` writes
+`run-dist/dist` (deploy that folder with `rundot deploy`) and `run-dist/build-report.json`. RUN's SDK
+(`@series-inc/rundot-game-sdk`) is not part of this repository and keeps its own licence.
 
 ## Play and check
 
@@ -30,13 +49,22 @@ code and the sound is synthesized in the browser. Progress is saved in the brows
 
     python -m unittest -v test_monster_mash.py
 
-Static checks always run. With Node.js installed, the rules block must pass its own checks (every order can
-earn 3 stars with the first eight ingredients, 45 different monsters, the Moon Recipe and streak rules), and
-the whole page runs against a stub browser: a night played with clicks, keys, the shop, the book, the Moon
-Recipe and a phone-shaped window.
+Static checks always run, including that every RUN SDK call goes through the guard. With Node.js installed,
+the rules block must pass its own checks (every order can earn 3 stars with the first eight ingredients, 45
+different monsters whose share keys lead back to them, the Moon Recipe, streak and bonus rules), and the
+whole page runs against a stub browser: a night played with clicks, keys, the shop, the book, the Moon Recipe
+and a phone-shaped window, and a session on RUN with a fake SDK (the saved kitchen loads, a friend's link
+pays its bonus, Share, the rewarded ad and the reminder).
 
 `capture.py` (Playwright) runs the self-test in headless Chromium and saves screenshots, covers and a
 portrait demo video.
+
+## Changes
+
+- **0.2.0:** RUN support (player storage, share links with a friend bonus, an optional rewarded ad, a daily
+  reminder), a streak bonus for the Moon Recipe, and the result card re-laid so the "Perfect night" line is
+  no longer hidden under the button.
+- **0.1.0:** first version.
 
 ## Licence
 
