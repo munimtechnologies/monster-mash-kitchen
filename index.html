@@ -1,0 +1,723 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Monster Mash Kitchen</title>
+<!-- Monster Mash Kitchen v0.1.0 (Apache-2.0), by MV2 of Munim, Inc., made with AI agents. Built on html-jam-kit: one self-contained HTML file. -->
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#1c1433;touch-action:none;user-select:none;-webkit-user-select:none}
+canvas{display:block;position:absolute}
+body.demo canvas{cursor:none}
+#test,#covers{position:absolute;inset:16px;overflow:auto;background:#101820f2;color:#e8eef4;border-radius:10px;padding:14px;z-index:3;white-space:pre-wrap;font:13px/1.4 ui-monospace,Consolas,monospace}
+#covers img{display:block;max-width:100%;margin:8px 0 18px;border:1px solid #ffffff33}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="test" hidden></div>
+<div id="covers" hidden></div>
+
+<script id="logic">
+"use strict";
+// Monster Mash Kitchen rules: no DOM, no canvas, no audio, so the tests can run this block under Node.
+// Every pair of two different ingredients mashes into its own monster, always the same one. A monster's
+// Spooky, Cute and Gooey (1-5) are 1 plus what its two ingredients add. Customers order by those stats.
+const W=720,H=1280;                 // logical size, portrait; wider screens are letterboxed
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+function shuffle(a,r){for(let k=a.length-1;k>0;k--){const j=Math.floor(r()*(k+1));[a[k],a[j]]=[a[j],a[k]];}return a;}
+
+// s, c, gd: what each ingredient adds to Spooky, Cute and Gooey (0-2). pre/suf build the monster's name,
+// col is its body or belly colour, feat what it grows. The last two are bought in the shop.
+const ING=[
+ {id:"pumpkin",name:"Pumpkin",icon:"🎃",s:1,c:2,gd:0,clue:"grows in a patch",pre:"Gourd",suf:"kin",col:"#ff8a2a",feat:"stem",price:0},
+ {id:"batwing",name:"Bat wing",icon:"🦇",s:2,c:1,gd:0,clue:"flaps at night",pre:"Flap",suf:"flutter",col:"#6a5a8f",feat:"wings",price:0},
+ {id:"slime",name:"Slime",icon:"🧪",s:0,c:1,gd:2,clue:"wobbles",pre:"Gloop",suf:"slop",col:"#7ddc4a",feat:"drips",price:0},
+ {id:"moonlight",name:"Moonlight",icon:"🌙",s:0,c:2,gd:1,clue:"shines",pre:"Luna",suf:"glow",col:"#cfe3ff",feat:"halo",price:0},
+ {id:"bone",name:"Bone",icon:"🦴",s:2,c:0,gd:0,clue:"rattles",pre:"Rattle",suf:"bones",col:"#efe6d2",feat:"horns",price:0},
+ {id:"mushroom",name:"Mushroom",icon:"🍄",s:1,c:0,gd:2,clue:"grows in the dark",pre:"Spore",suf:"shroom",col:"#d94a4a",feat:"spots",price:0},
+ {id:"pepper",name:"Ghost pepper",icon:"🌶️",s:2,c:0,gd:1,clue:"burns your tongue",pre:"Blaze",suf:"scorch",col:"#e8402a",feat:"flames",price:0},
+ {id:"candle",name:"Candle",icon:"🕯️",s:1,c:1,gd:1,clue:"flickers",pre:"Wick",suf:"wax",col:"#f6e3a8",feat:"wick",price:0},
+ {id:"silk",name:"Spider silk",icon:"🕸️",s:2,c:0,gd:2,clue:"spins a web",pre:"Webby",suf:"weaver",col:"#9aa3b5",feat:"legs",price:60},
+ {id:"stardust",name:"Stardust",icon:"✨",s:0,c:2,gd:0,clue:"twinkles",pre:"Twinkle",suf:"sparkle",col:"#ffd84a",feat:"sparkles",price:120}
+];
+const BASE=8,STATS=["S","C","G"],STAT_NAME={S:"Spooky",C:"Cute",G:"Gooey"},STAT_ICON={S:"👻",C:"💗",G:"💧"};
+const PERFECT_BONUS=30;
+const PAIRS=[];for(let i=0;i<ING.length;i++)for(let j=i+1;j<ING.length;j++)PAIRS.push([i,j]);
+
+const pairKey=(i,j)=>Math.min(i,j)+"-"+Math.max(i,j);
+const QUIRK={S:["Hides under beds for fun.","Says BOO to its own reflection.","Collects other monsters' shadows."],
+  C:["Wants a hug. Right now.","Purrs when you say its name.","Brings you tiny presents."],
+  G:["Leaves a sticky trail everywhere.","Sleeps in the bathtub.","Wobbles when it laughs."]};
+function monster(i,j){
+  const lo=Math.min(i,j),hi=Math.max(i,j),a=ING[lo],b=ING[hi];
+  const st={S:clamp(1+a.s+b.s,1,5),C:clamp(1+a.c+b.c,1,5),G:clamp(1+a.gd+b.gd,1,5)};
+  const top=STATS.reduce((m,k)=>st[k]>st[m]?k:m,"S");
+  return {key:pairKey(i,j),i:lo,j:hi,name:a.pre+b.suf,st,top,eyes:1+(lo+hi*2)%3,body:lo%3,
+    bio:"Mashed from "+a.name.toLowerCase()+" and "+b.name.toLowerCase()+". "+QUIRK[top][(lo*3+hi)%3]};
+}
+
+// what customers ask for: a range for some stats ([lowest, highest]); "surprise" wants a monster not yet in the book
+const ORDERS=[
+ {id:"cutegoo",text:"Something cute but gooey, please!",need:{C:[3,5],G:[3,5]}},
+ {id:"spookiest",text:"The spookiest thing you have.",need:{S:[5,5]}},
+ {id:"sweet",text:"Sweet as pie, and nothing scary!",need:{C:[4,5],S:[1,2]}},
+ {id:"goopiest",text:"As goopy as it gets.",need:{G:[5,5]}},
+ {id:"hug",text:"Scary, but I still want to hug it.",need:{S:[3,5],C:[3,5]}},
+ {id:"dry",text:"Spooky and bone-dry. No goo!",need:{S:[4,5],G:[1,1]}},
+ {id:"everything",text:"A little bit of everything.",need:{S:[3,5],C:[3,5],G:[3,5]}},
+ {id:"creepygoo",text:"Gooey and creepy, my favourite.",need:{S:[4,5],G:[3,5]}},
+ {id:"clean",text:"Cute and clean. No slime on my costume!",need:{C:[4,5],G:[1,1]}},
+ {id:"cutest",text:"The cutest one you can make.",need:{C:[5,5]}},
+ {id:"mild",text:"Something gentle: not too spooky, not too gooey.",need:{S:[1,2],G:[1,2]}},
+ {id:"surprise",text:"Surprise me! One I've never seen.",need:{},isNew:true},
+ {id:"slimefriend",text:"A gooey friend who isn't scary at all.",need:{G:[4,5],S:[1,1]}},
+ {id:"medium",text:"Medium spooky. Like, a three.",need:{S:[3,3]}}
+];
+const ORDER=Object.fromEntries(ORDERS.map(o=>[o.id,o]));
+const FIRST_NIGHT=["cutest","spookiest","goopiest","hug","surprise","everything"];
+function needText(o){
+  if(o.isNew)return "📖 A monster that isn't in your book yet";
+  return Object.keys(o.need).map(k=>{const [lo,hi]=o.need[k];return STAT_ICON[k]+" "+STAT_NAME[k]+" "+(lo===hi?String(lo):hi>=5?lo+"+":lo<=1?hi+" or less":lo+"–"+hi);}).join(" · ");
+}
+// how far a monster is from an order: the sum of how much each stat falls outside its range
+function orderMiss(o,st){let m=0;for(const k of Object.keys(o.need)){const [lo,hi]=o.need[k];m+=Math.max(0,lo-st[k])+Math.max(0,st[k]-hi);}return m;}
+function stars(o,m,isNew){return o.isNew?(isNew?3:1):Math.max(0,3-orderMiss(o,m.st));}
+function coinsFor(st,isNew,moon){return st*5+(isNew?10:0)+(moon?50:0);}
+// the six orders of night n: night 1 teaches, later nights draw from every order
+function nightOrders(n,canSurprise){
+  if(n<=1)return FIRST_NIGHT.slice();
+  const r=mulberry32((n*7919+31)>>>0),pool=ORDERS.map(o=>o.id).filter(id=>canSurprise||id!=="surprise");
+  return shuffle(pool,r).slice(0,6);
+}
+// the pair that best fits an order with the first nIng ingredients (book: what has been made already)
+function bestPair(o,nIng,book){
+  let pair=null,best=-1;
+  for(let i=0;i<nIng;i++)for(let j=i+1;j<nIng;j++){const m=monster(i,j),s=stars(o,m,!(book&&book[m.key]));if(s>best){best=s;pair=[i,j];}}
+  return {pair,stars:best};
+}
+
+// the Moon Recipe: one secret pair of the first eight ingredients a day, the same for everyone on that date
+function dailySeed(d){let h=2166136261;for(const ch of String(d))h=Math.imul(h^ch.charCodeAt(0),16777619);return h>>>0;}
+function moonPair(d){const s=dailySeed(d),i=s%BASE;let j=(s>>>8)%(BASE-1);if(j>=i)j++;return [Math.min(i,j),Math.max(i,j)];}
+function moonClue(d){const [i,j]=moonPair(d),known=(dailySeed(d)>>>16)%2?i:j;return "something that "+ING[known].clue+" + ?";}
+function dayIndex(d){const [y,m,dd]=String(d).split("-").map(Number);return Math.round(Date.UTC(y,m-1,dd)/864e5);}
+// a streak grows by one on the next calendar day and restarts after a missed day
+function nextStreak(prev,today){
+  if(!prev||!prev.date)return {date:today,streak:1};
+  const gap=dayIndex(today)-dayIndex(prev.date);
+  return gap===0?{date:prev.date,streak:prev.streak|0}:gap===1?{date:today,streak:(prev.streak|0)+1}:{date:today,streak:1};
+}
+const SKINS=[{id:"swamp",name:"Swamp green",brew:"#5fd35a",pot:"#2b2b38",price:0},{id:"royal",name:"Royal purple",brew:"#b06bff",pot:"#2b2238",price:40},
+  {id:"ember",name:"Ember orange",brew:"#ff8a3a",pot:"#382622",price:80},{id:"gold",name:"Golden",brew:"#ffd84a",pot:"#5a4a1a",price:150}];
+const SKIN=Object.fromEntries(SKINS.map(s=>[s.id,s]));
+
+function selfTestLogic(){
+  const problems=[],names=new Set();
+  if(ING.length!==10||ING.filter(x=>!x.price).length!==BASE||ING.slice(0,BASE).some(x=>x.price))problems.push("expected 8 free ingredients, then 2 to buy");
+  for(const x of ING)for(const v of [x.s,x.c,x.gd])if(!(v>=0&&v<=2))problems.push(x.id+": a stat outside 0-2");
+  if(PAIRS.length!==45)problems.push("expected 45 pairs, found "+PAIRS.length);
+  for(const [i,j] of PAIRS){
+    const m=monster(i,j),w="monster "+i+"+"+j;
+    if(m.key!==pairKey(j,i)||monster(j,i).name!==m.name)problems.push(w+": the order of ingredients changes it");
+    if(names.has(m.name))problems.push(w+": the name "+m.name+" is used twice");
+    names.add(m.name);
+    for(const k of STATS)if(!(m.st[k]>=1&&m.st[k]<=5))problems.push(w+": "+k+" is "+m.st[k]);
+    if(!m.bio||m.bio.length>90)problems.push(w+": bio is "+m.bio.length+" characters");
+    if(!(m.eyes>=1&&m.eyes<=3)||!(m.body>=0&&m.body<=2))problems.push(w+": bad look");
+  }
+  if(names.size!==45)problems.push("expected 45 monster names, found "+names.size);
+  if(new Set(ORDERS.map(o=>o.id)).size!==ORDERS.length)problems.push("two orders share an id");
+  for(const o of ORDERS){
+    if(!needText(o))problems.push("order "+o.id+": no needs line");
+    if(o.isNew){
+      const m=monster(0,1);
+      if(stars(o,m,true)!==3||stars(o,m,false)!==1)problems.push("order "+o.id+": a new monster should earn 3 stars, a repeat 1");
+      continue;
+    }
+    // every order can earn 3 stars with the first eight ingredients, and some pairs earn 0 or 1
+    const b=bestPair(o,BASE,null);
+    if(b.stars!==3)problems.push("order "+o.id+": the best with the first 8 ingredients is "+b.stars+" stars");
+    let worst=3;for(let i=0;i<BASE;i++)for(let j=i+1;j<BASE;j++)worst=Math.min(worst,stars(o,monster(i,j),false));
+    if(worst>=2)problems.push("order "+o.id+": almost anything earns "+worst+" stars");
+    const m=monster(b.pair[0],b.pair[1]);
+    if(orderMiss(o,m.st)!==0)problems.push("order "+o.id+": a 3-star monster still misses");
+  }
+  if(JSON.stringify(nightOrders(1,true))!==JSON.stringify(FIRST_NIGHT))problems.push("night 1 should be the teaching night");
+  const seen=new Set();
+  for(let n=2;n<=40;n++){
+    const a=nightOrders(n,true),b=nightOrders(n,false);
+    if(a.length!==6||new Set(a).size!==6||a.some(id=>!ORDER[id]))problems.push("night "+n+": bad orders "+a.join());
+    if(JSON.stringify(a)!==JSON.stringify(nightOrders(n,true)))problems.push("night "+n+": not the same twice");
+    if(b.includes("surprise"))problems.push("night "+n+": a surprise order with a full book");
+    seen.add(a.join());
+  }
+  if(seen.size<30)problems.push("nights repeat too often ("+seen.size+" different of 39)");
+  const moons=new Set();
+  for(let d=1;d<=28;d++){
+    const day="2026-10-"+String(d).padStart(2,"0"),[i,j]=moonPair(day);
+    if(!(i>=0&&i<j&&j<BASE))problems.push("moon "+day+": bad pair "+i+","+j);
+    if(moonPair(day).join()!==[i,j].join())problems.push("moon "+day+": not the same twice");
+    if(!moonClue(day).includes(ING[i].clue)&&!moonClue(day).includes(ING[j].clue))problems.push("moon "+day+": the clue names neither ingredient");
+    moons.add(i+"-"+j);
+  }
+  if(moons.size<8)problems.push("only "+moons.size+" different Moon Recipes in 28 days");
+  const S=(p,t)=>JSON.stringify(nextStreak(p,t));
+  if(S({date:"",streak:0},"2026-10-14")!==JSON.stringify({date:"2026-10-14",streak:1}))problems.push("first streak");
+  if(S({date:"2026-10-13",streak:4},"2026-10-14")!==JSON.stringify({date:"2026-10-14",streak:5}))problems.push("next-day streak");
+  if(S({date:"2026-10-14",streak:4},"2026-10-14")!==JSON.stringify({date:"2026-10-14",streak:4}))problems.push("same-day streak");
+  if(S({date:"2026-10-12",streak:4},"2026-10-14")!==JSON.stringify({date:"2026-10-14",streak:1}))problems.push("missed-day streak");
+  if(S({date:"2026-10-31",streak:2},"2026-11-01")!==JSON.stringify({date:"2026-11-01",streak:3}))problems.push("month-end streak");
+  if(coinsFor(3,true,false)!==25||coinsFor(0,false,false)!==0||coinsFor(2,false,true)!==60)problems.push("coin rewards");
+  const pr=SKINS.map(s=>s.price);
+  if(pr[0]!==0||pr.some((p,k)=>k&&p<=pr[k-1]))problems.push("cauldron prices should start free and rise");
+  return problems;
+}
+</script>
+
+<script>
+"use strict";
+// ---------- screen: a 720x1280 portrait kitchen, letterboxed to any window or phone ----------
+const cv=document.getElementById("c");
+let g=cv.getContext("2d");
+const view={scale:1,ox:0,oy:0};
+function fit(){
+  const dpr=Math.min(window.devicePixelRatio||1,2),s=Math.min(innerWidth/W,innerHeight/H);
+  view.scale=s;view.ox=(innerWidth-W*s)/2;view.oy=(innerHeight-H*s)/2;
+  cv.style.left=view.ox+"px";cv.style.top=view.oy+"px";cv.style.width=W*s+"px";cv.style.height=H*s+"px";
+  cv.width=Math.max(1,Math.round(W*s*dpr));cv.height=Math.max(1,Math.round(H*s*dpr));
+  g.setTransform(cv.width/W,0,0,cv.height/H,0,0);
+}
+const BTN={sound:{x:556,y:16,w:148,h:56},book:{x:24,y:858,w:180,h:84},mash:{x:224,y:848,w:272,h:104},shop:{x:516,y:858,w:180,h:84}};
+const SLOT=[{x:262,y:548},{x:458,y:548}];       // the two picked ingredients float over the cauldron
+function cardRect(i){return {x:20+(i%5)*136,y:968+Math.floor(i/5)*140,w:128,h:130};}
+const RESULT_BOX={x:36,y:130,w:648,h:1010},RESULT_BTN={x:160,y:1040,w:400,h:84};
+const NIGHT_BOX={x:70,y:300,w:580,h:640},NIGHT_BTN={x:160,y:830,w:400,h:84};
+const BOOK_BOX={x:20,y:40,w:680,h:1200},BOOK_CLOSE={x:530,y:58,w:156,h:64};
+function bookSlot(q){return {x:36+(q%5)*130,y:206+Math.floor(q/5)*112,w:122,h:104};}
+const SHOP_BOX={x:40,y:150,w:640,h:930},SHOP_CLOSE={x:240,y:984,w:240,h:72};
+function shopRow(q){return {x:60,y:250+q*118,w:600,h:106};}
+function shopBtn(q){const r=shopRow(q);return {x:r.x+r.w-176,y:r.y+18,w:162,h:70};}
+const CUSTOMERS=[{icon:"👻",name:"a kid in a sheet"},{icon:"🧛",name:"a tiny vampire"},{icon:"🧙",name:"the witch next door"},{icon:"🧟",name:"Grandpa Zombie"},
+  {icon:"🦸",name:"a superhero"},{icon:"🧚",name:"a fairy"},{icon:"🤡",name:"a clown"},{icon:"🐱",name:"a cat in a cat costume"}];
+
+// ---------- progress: saved in this browser only ----------
+const SAVE_KEY="monstermash.v1";
+const coverMode=location.hash==="#cover";
+let demo=location.hash==="#demo",noSave=demo,save=load();
+function fresh(){return {night:1,k:0,orders:nightOrders(1,true),tonight:0,coins:0,ing:BASE,book:{},skins:["swamp"],skin:"swamp",daily:{date:"",streak:0},moonFound:"",mute:false};}
+function load(){
+  const f=fresh();
+  try{
+    const s=JSON.parse(localStorage.getItem(SAVE_KEY)||"null");if(!s||typeof s!=="object")return f;
+    const night=Math.max(1,s.night|0);
+    const orders=Array.isArray(s.orders)&&s.orders.length===6&&s.orders.every(id=>ORDER[id])?s.orders:nightOrders(night,true);
+    const skins=Array.isArray(s.skins)?s.skins.filter(id=>SKIN[id]):[];if(!skins.includes("swamp"))skins.unshift("swamp");
+    return {night,k:clamp(s.k|0,0,6),orders,tonight:Math.max(0,s.tonight|0),coins:Math.max(0,s.coins|0),ing:clamp(s.ing|0,BASE,ING.length),
+      book:s.book&&typeof s.book==="object"?s.book:{},skins,skin:skins.includes(s.skin)?s.skin:"swamp",
+      daily:s.daily&&s.daily.date?s.daily:f.daily,moonFound:String(s.moonFound||""),mute:!!s.mute};
+  }catch(e){return f;}
+}
+function store(){if(noSave)return;try{localStorage.setItem(SAVE_KEY,JSON.stringify(save));}catch(e){}}
+function today(){const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");}
+function untilMidnight(){const n=new Date(),m=new Date(n.getFullYear(),n.getMonth(),n.getDate()+1),s=Math.max(0,Math.floor((m-n)/1000));return Math.floor(s/3600)+"h "+String(Math.floor(s/60)%60).padStart(2,"0")+"m";}
+const discovered=()=>Object.keys(save.book).length;
+const pairsOpen=()=>save.ing*(save.ing-1)/2;
+
+// ---------- audio: synthesized sounds (html-jam-kit); nothing starts before a click, touch or key ----------
+const midiHz=m=>440*Math.pow(2,(m-69)/12),easeOut=x=>1-Math.pow(1-Math.max(0,Math.min(1,x)),3);
+const audio=(()=>{
+  let ac=null,master=null,on=true;
+  function ensure(){
+    if(ac)return true;
+    try{ac=new (window.AudioContext||window.webkitAudioContext)();master=ac.createGain();master.gain.value=on?0.8:0;master.connect(ac.destination);return true;}catch(e){ac=null;return false;}
+  }
+  return{
+    unlock(){if(ensure()&&ac.state==="suspended"&&!document.hidden)ac.resume().catch(()=>{});},
+    started(){return !!ac;},
+    isOn(){return on;},
+    toggle(){on=!on;if(master)master.gain.value=on?0.8:0;return on;},
+    pause(hidden){if(!ac)return;try{hidden?ac.suspend():ac.resume();}catch(e){}},
+    tone(f,d,type,vol,delay){if(!ac)return;const t0=ac.currentTime+(delay||0),o=ac.createOscillator(),e=ac.createGain();o.type=type||"sine";o.frequency.value=f;e.gain.setValueAtTime(vol||0.08,t0);e.gain.exponentialRampToValueAtTime(0.0001,t0+d);o.connect(e);e.connect(master);o.start(t0);o.stop(t0+d+0.02);},
+    tune(notes,bpm,type,vol){if(!ac)return;let t=0;const beat=60/(bpm||120);for(const [n,b] of notes){if(n!=null)this.tone(midiHz(n),b*beat*0.9,type||"triangle",vol||0.05,t);t+=b*beat;}}
+  };
+})();
+document.addEventListener("visibilitychange",()=>audio.pause(document.hidden));
+const sfx={
+  pick:i=>audio.tone(midiHz(60+[0,2,4,7,9,12,14,16,19,21][i]),0.14,"triangle",0.05),
+  drop:()=>audio.tone(300,0.08,"triangle",0.04),
+  nope:()=>audio.tone(140,0.15,"square",0.03),
+  bubble:()=>{for(let q=0;q<7;q++)audio.tone(90+(q*53)%70,0.12,"sine",0.08,q*0.11);},
+  pop:()=>audio.tune([[60,0.25],[67,0.25],[72,0.5]],400,"square",0.035),
+  stars:n=>{for(let q=0;q<n;q++)audio.tone(midiHz(76+q*4),0.25,"triangle",0.05,0.25+q*0.18);if(!n)audio.tone(110,0.3,"sawtooth",0.03,0.25);},
+  coin:()=>{audio.tone(988,0.07,"square",0.03);audio.tone(1319,0.12,"square",0.03,0.07);},
+  moon:()=>audio.tune([[72,0.5],[79,0.5],[84,0.5],[88,1.5]],260,"sine",0.05)
+};
+
+// ---------- game state ----------
+const now=()=>performance.now()/1000;
+let phase="kitchen",overlay=null,picked=[],mashAt=0,result=null,resultAt=0,bookSel=null,mouse=null,parts=[],demoNext=0,toast="",toastUntil=0;
+const orderNow=()=>ORDER[save.orders[Math.min(save.k,5)]];
+const customerNow=()=>CUSTOMERS[(save.night*6+save.k)%CUSTOMERS.length];
+function say(text){toast=text;toastUntil=now()+2.5;}
+
+function pick(i){
+  if(phase!=="kitchen"||overlay||i<0||i>=ING.length)return;
+  if(i>=save.ing){overlay="shop";return;}
+  const at=picked.indexOf(i);
+  if(at>=0){picked.splice(at,1);sfx.drop();return;}
+  if(picked.length<2)picked.push(i);else picked[1]=i;
+  sfx.pick(i);
+}
+function mash(){
+  if(phase!=="kitchen"||overlay||picked.length<2)return false;
+  phase="mashing";mashAt=now();sfx.bubble();
+  return true;
+}
+// the monster pops out and goes straight to the customer at the counter
+function resolve(){
+  const m=monster(picked[0],picked[1]),o=orderNow(),who=customerNow(),d=today();
+  const isNew=!save.book[m.key],full=discovered()>=pairsOpen(),mp=moonPair(d);
+  const moon=save.moonFound!==d&&m.i===mp[0]&&m.j===mp[1];
+  const st=stars(o,m,isNew||full);
+  let coins=coinsFor(st,isNew,moon);
+  const e=save.book[m.key]||{n:0,moon:false};e.n++;if(moon)e.moon=true;save.book[m.key]=e;
+  if(moon){save.moonFound=d;save.daily=nextStreak(save.daily,d);}
+  save.tonight+=st;save.k++;
+  const perfect=save.k>=6&&save.tonight>=18;
+  if(perfect)coins+=PERFECT_BONUS;
+  save.coins+=coins;
+  store();
+  result={m,o,who,isNew,moon,stars:st,coins,perfect};resultAt=now();phase="result";picked=[];
+  sfx.pop();sfx.stars(st);if(moon)sfx.moon();
+  burst(360,620,[ING[m.i].col,ING[m.j].col,"#ffd84a"],st===3?40:16);
+}
+function next(){
+  if(phase!=="result"||now()<resultAt+0.5)return;
+  phase=save.k>=6?"night":"kitchen";result=null;
+  if(phase==="night"&&save.tonight>=18)sfx.coin();
+}
+function startNight(){
+  if(phase!=="night")return;
+  save.night++;save.k=0;save.tonight=0;save.orders=nightOrders(save.night,discovered()<pairsOpen());
+  store();phase="kitchen";picked=[];
+  say("Night "+save.night+". The kitchen is open!");
+}
+function shopItems(){return [{kind:"ing",i:8},{kind:"ing",i:9}].concat(SKINS.map(s=>({kind:"skin",id:s.id})));}
+// [button label, can it be pressed]
+function shopState(it){
+  if(it.kind==="ing"){if(save.ing>it.i)return ["Owned",false];if(save.ing<it.i)return ["Locked",false];return [ING[it.i].price+" 🪙",save.coins>=ING[it.i].price];}
+  const s=SKIN[it.id];
+  if(save.skin===it.id)return ["In use",false];
+  if(save.skins.includes(it.id))return ["Use",true];
+  return [s.price+" 🪙",save.coins>=s.price];
+}
+function buy(it){
+  if(!shopState(it)[1]){sfx.nope();return false;}
+  if(it.kind==="ing"){save.coins-=ING[it.i].price;save.ing=it.i+1;say(ING[it.i].name+" joins the kitchen! New monsters to find.");}
+  else{const s=SKIN[it.id];if(!save.skins.includes(it.id)){save.coins-=s.price;save.skins.push(it.id);}save.skin=it.id;}
+  store();sfx.coin();
+  return true;
+}
+
+// ---------- input: mouse, touch and pen through pointer events, plus keys ----------
+const inside=(b,x,y)=>x>=b.x&&y>=b.y&&x<b.x+b.w&&y<b.y+b.h;
+function toLogical(e){return [(e.clientX-view.ox)/view.scale,(e.clientY-view.oy)/view.scale];}
+function press(x,y){
+  if(demo)return;
+  if(overlay==="book"){
+    if(inside(BOOK_CLOSE,x,y)||!inside(BOOK_BOX,x,y)){overlay=null;return;}
+    for(let q=0;q<PAIRS.length;q++)if(inside(bookSlot(q),x,y)){bookSel=q;audio.tone(660,0.06,"sine",0.03);return;}
+    return;
+  }
+  if(overlay==="shop"){
+    const items=shopItems();
+    for(let q=0;q<items.length;q++)if(inside(shopBtn(q),x,y)){buy(items[q]);return;}
+    if(inside(SHOP_CLOSE,x,y)||!inside(SHOP_BOX,x,y))overlay=null;
+    return;
+  }
+  if(inside(BTN.sound,x,y)){audio.toggle();save.mute=!audio.isOn();store();return;}
+  if(phase==="result"){if(inside(RESULT_BTN,x,y))next();return;}
+  if(phase==="night"){if(inside(NIGHT_BTN,x,y))startNight();return;}
+  if(phase!=="kitchen")return;
+  if(inside(BTN.book,x,y)){overlay="book";bookSel=null;return;}
+  if(inside(BTN.shop,x,y)){overlay="shop";return;}
+  if(inside(BTN.mash,x,y)){if(!mash())sfx.nope();return;}
+  for(let q=0;q<picked.length;q++)if(Math.hypot(x-SLOT[q].x,y-SLOT[q].y)<56){picked.splice(q,1);sfx.drop();return;}
+  for(let i=0;i<ING.length;i++)if(inside(cardRect(i),x,y)){pick(i);return;}
+}
+addEventListener("pointerdown",e=>{if(coverMode)return;audio.unlock();const [x,y]=toLogical(e);mouse={x,y};press(x,y);e.preventDefault();},{passive:false});
+addEventListener("pointermove",e=>{const [x,y]=toLogical(e);mouse=e.pointerType==="mouse"?{x,y}:null;});
+addEventListener("contextmenu",e=>{if(!coverMode)e.preventDefault();});
+addEventListener("keydown",e=>{
+  audio.unlock();
+  if(e.key==="m"||e.key==="M"){audio.toggle();save.mute=!audio.isOn();store();return;}
+  if(demo)return;
+  const k=e.key;
+  if(k===" "||k==="Enter")e.preventDefault();
+  if(overlay){if(k==="b"||k==="B"||k==="s"||k==="S"||k==="Enter")overlay=null;return;}
+  if(phase==="result"){if(k===" "||k==="Enter")next();return;}
+  if(phase==="night"){if(k===" "||k==="Enter")startNight();return;}
+  if(phase!=="kitchen")return;
+  if(k.length===1&&k>="0"&&k<="9")pick(k==="0"?9:+k-1);
+  else if(k===" "||k==="Enter")mash();
+  else if(k==="Backspace")picked.pop();
+  else if(k==="b"||k==="B"){overlay="book";bookSel=null;}
+  else if(k==="s"||k==="S")overlay="shop";
+});
+addEventListener("resize",fit);
+
+// ---------- drawing ----------
+const INK="#1a1426",SHADOW="#2a2238";
+function rr(x,y,w,h,r){g.beginPath();g.moveTo(x+r,y);g.arcTo(x+w,y,x+w,y+h,r);g.arcTo(x+w,y+h,x,y+h,r);g.arcTo(x,y+h,x,y,r);g.arcTo(x,y,x+w,y,r);g.closePath();}
+function wrap(text,maxW){const lines=[];let line="";for(const w of text.split(" ")){const t=line?line+" "+w:w;if(g.measureText(t).width>maxW&&line){lines.push(line);line=w;}else line=t;}if(line)lines.push(line);return lines;}
+function centre(text,x,y){g.textAlign="center";g.textBaseline="middle";g.fillText(text,x,y);g.textBaseline="alphabetic";}
+function starShape(x,y,r,fill){g.beginPath();for(let k=0;k<10;k++){const a=-Math.PI/2+k*Math.PI/5,d=k%2?r*0.45:r;g.lineTo(x+Math.cos(a)*d,y+Math.sin(a)*d);}g.closePath();g.fillStyle=fill?"#ffc93c":"#d8cce8";g.fill();g.strokeStyle="#9a6f00";g.lineWidth=2;g.stroke();}
+function drawStars(cx,cy,n,r){for(let k=0;k<3;k++)starShape(cx+(k-1)*r*2.6,cy,r,k<n);}
+function drawButton(b,label,primary,size){
+  const hot=mouse&&inside(b,mouse.x,mouse.y);
+  g.fillStyle=primary?(hot?"#a46cff":"#8f52f5"):(hot?"#4a3a6e":"#3a2d58");rr(b.x,b.y,b.w,b.h,18);g.fill();
+  g.strokeStyle=primary?"#d9c2ff":"#ffffff30";g.lineWidth=3;g.stroke();
+  g.fillStyle="#ffffff";g.font="bold "+(size||26)+"px system-ui,sans-serif";centre(label,b.x+b.w/2,b.y+b.h/2+2);
+}
+function drawBackground(w,h,t){
+  const gr=g.createLinearGradient(0,0,0,h);gr.addColorStop(0,"#1c1433");gr.addColorStop(0.55,"#3a2552");gr.addColorStop(1,"#1a1228");
+  g.fillStyle=gr;g.fillRect(0,0,w,h);
+  for(let q=0;q<36;q++){g.fillStyle="rgba(255,255,230,"+(0.25+0.25*Math.sin(t*1.3+q)).toFixed(3)+")";g.fillRect((q*137.5)%w,(q*71.3)%(h*0.4),2,2);}
+  g.fillStyle="#fff4d0";g.globalAlpha=0.85;g.beginPath();g.arc(w*0.08,h*0.16,Math.min(w,h)*0.036,0,7);g.fill();g.globalAlpha=1;
+  g.fillStyle="#6b4a3a";g.fillRect(0,h*0.35,w,h*0.027);g.fillStyle="#57392c";g.fillRect(0,h*0.377,w,h*0.008);
+}
+function drawCauldron(cx,cy,R,t,sk,stir){
+  for(let q=0;q<3;q++){const h=R*(0.22+0.08*Math.sin(t*9+q*2));g.fillStyle=q===1?"#ffd84a":"#ff6a2a";g.beginPath();g.moveTo(cx+(q-1)*R*0.35-R*0.12,cy+R*0.92);g.quadraticCurveTo(cx+(q-1)*R*0.35,cy+R*0.92-h*2,cx+(q-1)*R*0.35+R*0.12,cy+R*0.92);g.closePath();g.fill();}
+  g.fillStyle=sk.pot;
+  for(const s of [-1,1])g.fillRect(cx+s*R*0.62-R*0.07,cy+R*0.6,R*0.14,R*0.42);
+  g.beginPath();g.ellipse(cx,cy+R*0.15,R,R*0.82,0,0,7);g.fill();
+  g.fillStyle="#ffffff14";g.beginPath();g.ellipse(cx-R*0.45,cy+R*0.05,R*0.16,R*0.36,0.3,0,7);g.fill();
+  g.fillStyle="#3d3d52";g.beginPath();g.ellipse(cx,cy-R*0.5,R*1.06,R*0.27,0,0,7);g.fill();
+  g.fillStyle=sk.brew;g.beginPath();g.ellipse(cx,cy-R*0.5,R*0.9,R*0.19,0,0,7);g.fill();
+  for(let k=0;k<7;k++){
+    const ph=(t*(0.6+stir*1.6)+k*0.37)%1,bx=cx+Math.sin(k*2.3+t*0.5)*R*0.6,by=cy-R*0.5-ph*R*(0.4+stir*0.7),br=R*(0.04+0.012*((k*37)%5))*(1+stir);
+    g.globalAlpha=1-ph;g.beginPath();g.arc(bx,by,br,0,7);g.fill();
+  }
+  g.globalAlpha=1;
+}
+// a monster drawn from its two ingredients: body and colour from the first, belly and a second feature from the
+// other; bigger eyes and blush when cute, fangs when spooky, drips when gooey
+function featureBack(f,rx,ry,k,t,sil){
+  if(f==="wings"){
+    const fl=Math.sin(t*8)*0.25;g.fillStyle=sil?SHADOW:"#4a3a6a";
+    for(const s of [-1,1]){g.save();g.scale(s,1);g.rotate(fl);g.beginPath();g.moveTo(rx*0.6,-ry*0.2);g.lineTo(rx*1.55,-ry*0.75);g.lineTo(rx*1.35,-ry*0.1);g.lineTo(rx*1.6,ry*0.15);g.lineTo(rx*0.7,ry*0.2);g.closePath();g.fill();g.restore();}
+  }else if(f==="legs"){
+    g.strokeStyle=sil?SHADOW:INK;g.lineWidth=Math.max(1,4*k);
+    for(const s of [-1,1])for(let q=0;q<3;q++){const yy=-ry*0.2+q*ry*0.3,w=Math.sin(t*6+q)*6*k;g.beginPath();g.moveTo(s*rx*0.8,yy);g.lineTo(s*rx*1.3,yy-ry*0.25+w);g.lineTo(s*rx*1.45,yy+ry*0.3);g.stroke();}
+  }else if(f==="flames"){
+    for(let q=0;q<3;q++){const h=(30+10*Math.sin(t*9+q*2))*k,x=(q-1)*rx*0.4;g.fillStyle=sil?SHADOW:q===1?"#ffd84a":"#ff6a2a";g.beginPath();g.moveTo(x-12*k,-ry*0.85);g.quadraticCurveTo(x,-ry*0.85-h*2,x+12*k,-ry*0.85);g.closePath();g.fill();}
+  }
+}
+function featureFront(f,rx,ry,k,t,sil){
+  const c=col=>sil?SHADOW:col;
+  if(f==="stem"){g.fillStyle=c("#5a3a1a");g.fillRect(-6*k,-ry-18*k,12*k,22*k);g.fillStyle=c("#4caf50");g.beginPath();g.ellipse(16*k,-ry-12*k,16*k,7*k,-0.4,0,7);g.fill();}
+  else if(f==="halo"){g.strokeStyle=c("#e8f2ff");g.lineWidth=Math.max(1,6*k);g.beginPath();g.ellipse(0,-ry-22*k,rx*0.5,10*k,0,0,7);g.stroke();}
+  else if(f==="horns"){g.fillStyle=c("#f3ead6");g.strokeStyle=INK;g.lineWidth=Math.max(1,3*k);for(const s of [-1,1]){g.beginPath();g.moveTo(s*rx*0.35,-ry*0.85);g.lineTo(s*rx*0.6,-ry*1.35);g.lineTo(s*rx*0.62,-ry*0.7);g.closePath();g.fill();g.stroke();}}
+  else if(f==="wick"){g.strokeStyle=INK;g.lineWidth=Math.max(1,3*k);g.beginPath();g.moveTo(0,-ry);g.lineTo(0,-ry-16*k);g.stroke();const fl=1+0.15*Math.sin(t*12);g.fillStyle=c("#ffb02a");g.beginPath();g.ellipse(0,-ry-30*k,8*k*fl,15*k*fl,0,0,7);g.fill();}
+  else if(sil)return;
+  else if(f==="spots"){g.fillStyle="#fff4e8";for(const [px,py,r] of [[-0.45,-0.45,0.13],[0.4,-0.5,0.1],[0.55,0.05,0.09],[-0.6,0.1,0.08]]){g.beginPath();g.arc(px*rx,py*ry,r*rx,0,7);g.fill();}}
+  else if(f==="sparkles"){g.fillStyle="#ffd84a";for(let q=0;q<5;q++){const a=q*1.26+t*0.8,s=(4+3*Math.sin(t*5+q))*k+1;g.fillRect(Math.cos(a)*rx*1.15-s/2,Math.sin(a)*ry*1.1-s/2,s,s);}}
+  else if(f==="drips"){g.fillStyle="#7ddc4a";for(const dx of [-0.6,0.1,0.5]){g.beginPath();g.ellipse(dx*rx,-ry*0.55+Math.abs(dx)*ry*0.3,7*k,12*k,0,0,7);g.fill();}}
+}
+function drawMonster(m,x,y,R,t,o){
+  o=o||{};
+  const a=ING[m.i],b=ING[m.j],k=R/100,sil=!!o.sil,shape=[[0.8,0.76],[0.62,0.92],[0.9,0.64]][m.body];
+  const rx=R*shape[0],ry=R*shape[1],wob=Math.sin(t*3+m.i*1.7+m.j)*0.04,feats=[a.feat,b.feat];
+  g.save();g.translate(x,y);g.scale(1+wob,1-wob);
+  if(o.moon&&!sil){g.fillStyle="#cfe3ff";for(let q=3;q>0;q--){g.globalAlpha=0.12+0.04*Math.sin(t*3);g.beginPath();g.ellipse(0,0,rx+q*14*k,ry+q*14*k,0,0,7);g.fill();}g.globalAlpha=1;}
+  for(const f of feats)featureBack(f,rx,ry,k,t,sil);
+  g.fillStyle=sil?SHADOW:a.col;g.strokeStyle=INK;g.lineWidth=Math.max(1,4*k);
+  g.beginPath();g.ellipse(0,0,rx,ry,0,0,7);g.fill();g.stroke();
+  if(!sil){g.fillStyle=b.col;g.globalAlpha=0.75;g.beginPath();g.ellipse(0,ry*0.38,rx*0.55,ry*0.42,0,0,7);g.fill();g.globalAlpha=1;}
+  for(const f of feats)featureFront(f,rx,ry,k,t,sil);
+  if(sil){g.fillStyle="#8a7aa8";g.font="bold "+Math.round(R*0.9)+"px system-ui,sans-serif";centre("?",0,0);g.restore();return;}
+  const n=m.eyes,er=R*0.15*(m.st.C>=4?1.3:1),look=Math.sin(t*0.8+m.i)*er*0.25;
+  g.strokeStyle=INK;g.lineWidth=Math.max(1,3*k);
+  for(let e=0;e<n;e++){
+    const ex=(e-(n-1)/2)*rx*0.5,ey=-ry*0.22-(n===3&&e===1?ry*0.12:0);
+    g.fillStyle="#ffffff";g.beginPath();g.arc(ex,ey,er,0,7);g.fill();g.stroke();
+    g.fillStyle=INK;g.beginPath();g.arc(ex+look,ey+er*0.15,er*0.5,0,7);g.fill();
+    g.fillStyle="#ffffff";g.beginPath();g.arc(ex+look+er*0.18,ey-er*0.1,er*0.16,0,7);g.fill();
+  }
+  if(m.st.C>=4){g.fillStyle="#ff8ab0";g.globalAlpha=0.6;for(const s of [-1,1]){g.beginPath();g.ellipse(s*rx*0.55,ry*0.05,rx*0.14,ry*0.08,0,0,7);g.fill();}g.globalAlpha=1;}
+  const my=ry*0.2,mw=rx*0.42;
+  g.strokeStyle=INK;g.lineWidth=Math.max(1,4*k);g.beginPath();g.moveTo(-mw,my);g.quadraticCurveTo(0,my+ry*0.25,mw,my);g.stroke();
+  if(m.st.S>=4){g.fillStyle="#ffffff";for(const s of [-1,1]){const fx=s*mw*0.5,fy=my+ry*0.07;g.beginPath();g.moveTo(fx-6*k,fy);g.lineTo(fx+6*k,fy);g.lineTo(fx,fy+16*k);g.closePath();g.fill();}}
+  if(m.st.G>=4){g.fillStyle=feats.includes("drips")?"#7ddc4a":a.col;for(let q=0;q<3;q++){const len=(16+8*Math.sin(t*2+q))*k;g.beginPath();g.ellipse((q-1)*rx*0.5,ry*0.9+len*0.5,6*k,len*0.5+1,0,0,7);g.fill();}}
+  g.restore();
+}
+function drawTop(){
+  g.textAlign="left";g.fillStyle="#ffe9a8";g.font="bold 34px system-ui,sans-serif";g.fillText("🪙 "+save.coins,26,58);
+  g.textAlign="center";g.fillStyle="#f3e9ff";g.font="bold 28px system-ui,sans-serif";g.fillText("Night "+save.night+"   ⭐ "+save.tonight,350,44);
+  g.font="20px system-ui,sans-serif";g.fillStyle="#c9b8e8";g.fillText(save.k<6?"Customer "+(save.k+1)+" of 6":"Kitchen closed",350,74);
+  drawButton(BTN.sound,audio.isOn()?"🔊 Sound":"🔇 Sound",false,22);
+  // the Moon Recipe banner
+  const d=today(),found=save.moonFound===d,n=save.daily.streak;
+  g.fillStyle="#ffffff14";rr(20,94,680,68,16);g.fill();
+  g.textAlign="left";g.fillStyle=found?"#bfe0ff":"#f3e9ff";g.font="600 22px system-ui,sans-serif";
+  g.fillText(found?"🌙 Moon Recipe found! Streak: "+n+(n===1?" day":" days"):"🌙 Moon Recipe: "+moonClue(d),36,122);
+  g.font="17px system-ui,sans-serif";g.fillStyle="#b8a6d8";
+  g.fillText((found?"A new secret recipe rises in ":"One secret pair a day makes a glowing monster · new in ")+untilMidnight(),36,149);
+}
+function drawCustomer(t){
+  if(save.k>=6)return;
+  const o=orderNow(),who=customerNow(),bob=Math.sin(t*2)*6;
+  g.fillStyle="#ffffff";g.font="140px system-ui,sans-serif";centre(who.icon,110,330+bob);
+  g.fillStyle="#fff8ee";rr(215,184,485,252,22);g.fill();
+  g.beginPath();g.moveTo(218,290);g.lineTo(184,322);g.lineTo(218,334);g.closePath();g.fill();
+  g.textAlign="left";g.fillStyle="#7a5a9a";g.font="18px system-ui,sans-serif";g.fillText(who.name[0].toUpperCase()+who.name.slice(1)+" asks:",240,216);
+  g.fillStyle="#2a1f3a";g.font="600 30px system-ui,sans-serif";
+  wrap(o.text,440).slice(0,3).forEach((l,q)=>g.fillText(l,240,258+q*38));
+  g.fillStyle="#5a3d7a";g.font="600 21px system-ui,sans-serif";
+  wrap(needText(o),440).slice(0,2).forEach((l,q)=>g.fillText(l,240,384+q*28));
+}
+function drawCard(i,t){
+  const r=cardRect(i),a=ING[i],open=i<save.ing,sel=picked.includes(i);
+  g.fillStyle=!open?"#231b33":sel?"#6a4fa0":"#3a2d58";rr(r.x,r.y,r.w,r.h,16);g.fill();
+  g.strokeStyle=sel?"#ffd84a":"#ffffff22";g.lineWidth=sel?4:2;g.stroke();
+  g.fillStyle="#ffffff";
+  if(!open){
+    g.font="40px system-ui,sans-serif";centre("🔒",r.x+r.w/2,r.y+44);
+    g.font="600 18px system-ui,sans-serif";g.fillStyle="#b8a6d8";centre(a.name,r.x+r.w/2,r.y+86);
+    g.fillStyle="#ffe9a8";centre(a.price+" 🪙",r.x+r.w/2,r.y+112);
+    return;
+  }
+  g.font="52px system-ui,sans-serif";centre(a.icon,r.x+r.w/2,r.y+44+(sel?Math.sin(t*6)*3:0));
+  g.font="600 18px system-ui,sans-serif";centre(a.name,r.x+r.w/2,r.y+88);
+  g.font="16px system-ui,sans-serif";g.fillStyle="#e3d6ff";centre("👻"+a.s+" 💗"+a.c+" 💧"+a.gd,r.x+r.w/2,r.y+113);
+  g.textAlign="left";g.font="14px system-ui,sans-serif";g.fillStyle="#ffffff55";g.fillText(String((i+1)%10),r.x+8,r.y+20);
+}
+function drawKitchen(t){
+  const stir=phase==="mashing"?1:0,sk=SKIN[save.skin]||SKINS[0];
+  drawCauldron(360+(stir?Math.sin(t*40)*6:0),700,140,t,sk,stir);
+  g.fillStyle="#ffffff66";g.font="bold 40px system-ui,sans-serif";centre("+",360,548);
+  for(let q=0;q<2;q++){
+    const s=SLOT[q],i=picked[q];
+    if(i==null){
+      g.strokeStyle="#ffffff55";g.lineWidth=3;g.setLineDash([8,8]);g.beginPath();g.arc(s.x,s.y,50,0,7);g.stroke();g.setLineDash([]);
+      g.fillStyle="#ffffff66";g.font="22px system-ui,sans-serif";centre("pick",s.x,s.y);
+      continue;
+    }
+    const d=stir?Math.min(1,(t-mashAt)/0.45):0,y=s.y+d*90;
+    g.globalAlpha=1-d;g.fillStyle="#ffffff22";g.beginPath();g.arc(s.x,y,50,0,7);g.fill();
+    g.fillStyle="#ffffff";g.font="64px system-ui,sans-serif";centre(ING[i].icon,s.x,y+Math.sin(t*3+q)*4);g.globalAlpha=1;
+  }
+  drawButton(BTN.book,"📖 Book",false,26);
+  drawButton(BTN.shop,"🛒 Shop",false,26);
+  const ready=picked.length===2&&phase==="kitchen";
+  drawButton(BTN.mash,phase==="mashing"?"Mashing…":ready?"MASH!":"Pick 2",ready,ready?44:32);
+  for(let i=0;i<ING.length;i++)drawCard(i,t);
+  // the first customer of the first night: a ring shows what to tap
+  if(save.night===1&&save.k===0&&phase==="kitchen"&&!overlay&&!demo){
+    const b=bestPair(orderNow(),save.ing,save.book).pair,p=0.5+0.5*Math.sin(t*6);
+    const tgt=picked.length===2?(Math.min(...picked)===b[0]&&Math.max(...picked)===b[1]?[BTN.mash]:[]):b.filter(i=>!picked.includes(i)).map(cardRect);
+    g.strokeStyle="rgba(255,216,74,"+(0.5+0.5*p).toFixed(3)+")";g.lineWidth=6;
+    for(const r of tgt){rr(r.x-6,r.y-6,r.w+12,r.h+12,20);g.stroke();}
+    if(!(toast&&t<toastUntil)){g.fillStyle="#ffe9a8";g.font="600 22px system-ui,sans-serif";centre("Tap two ingredients, then MASH! Match the order.",360,468);}
+  }
+  g.fillStyle="#9c8cc0";g.font="15px system-ui,sans-serif";centre("Made by MV2 of Munim, Inc. with AI agents",360,1262);
+}
+function drawToast(){g.fillStyle="#ffe9a8";g.font="600 22px system-ui,sans-serif";centre(toast,360,468);}
+function dim(){g.fillStyle="rgba(0,0,0,0.55)";g.fillRect(0,0,W,H);}
+const VERDICT=["Not what they asked for.","Close-ish. They take it anyway.","Nearly right!","Exactly what they wanted!"];
+function drawResult(t){
+  const r=result,b=RESULT_BOX,cx=360,k=Math.min(1,(t-resultAt)/0.35);
+  dim();g.fillStyle="#fff8ee";rr(b.x,b.y,b.w,b.h,26);g.fill();
+  g.fillStyle="#5a2d8a";g.font="bold 40px system-ui,sans-serif";centre(r.moon?"🌙 A moonlit monster!":r.isNew?"New monster!":"Monster made",cx,b.y+60);
+  drawMonster(r.m,cx,b.y+290,140*easeOut(k)+1,t,{moon:r.moon});
+  g.fillStyle="#2a1f3a";g.font="bold 46px system-ui,sans-serif";centre((r.moon?"Moonlit ":"")+r.m.name,cx,b.y+480);
+  g.fillStyle="#5a4a6a";g.font="24px system-ui,sans-serif";
+  wrap(r.m.bio,560).slice(0,2).forEach((l,q)=>centre(l,cx,b.y+526+q*32));
+  STATS.forEach((s,q)=>{
+    const y=b.y+620+q*48;
+    g.textAlign="left";g.fillStyle="#2a1f3a";g.font="600 26px system-ui,sans-serif";g.textBaseline="middle";g.fillText(STAT_ICON[s]+" "+STAT_NAME[s],b.x+90,y);g.textBaseline="alphabetic";
+    for(let p=0;p<5;p++){g.fillStyle=p<r.m.st[s]?["#9b6bff","#ff6fae","#4fc83a"][q]:"#e2d8ee";g.beginPath();g.arc(b.x+330+p*44,y,15,0,7);g.fill();}
+  });
+  g.fillStyle="#ffffff";g.font="48px system-ui,sans-serif";centre(r.who.icon,b.x+92,b.y+800);
+  drawStars(cx+30,b.y+796,r.stars,24);
+  g.fillStyle="#2a1f3a";g.font="600 26px system-ui,sans-serif";centre(VERDICT[r.stars],cx,b.y+862);
+  g.fillStyle="#9a6f00";g.font="bold 24px system-ui,sans-serif";
+  centre("+"+r.coins+" 🪙"+(r.isNew?"  ·  new monster +10":"")+(r.moon?"  ·  moon +50":""),cx,b.y+904);
+  if(r.perfect){g.fillStyle="#5a2d8a";g.font="600 22px system-ui,sans-serif";centre("Perfect night! +"+PERFECT_BONUS+" coins included",cx,b.y+940);}
+  if(t>=resultAt+0.5)drawButton(RESULT_BTN,save.k>=6?"Close the kitchen":"Next customer ▶",true,30);
+}
+function drawNight(){
+  const b=NIGHT_BOX,cx=360,d=today();
+  dim();g.fillStyle="#fff8ee";rr(b.x,b.y,b.w,b.h,26);g.fill();
+  g.fillStyle="#5a2d8a";g.font="bold 42px system-ui,sans-serif";centre("Night "+save.night+" is over!",cx,b.y+70);
+  g.fillStyle="#2a1f3a";g.font="bold 32px system-ui,sans-serif";centre("⭐ "+save.tonight+" of 18 stars",cx,b.y+140);
+  g.font="26px system-ui,sans-serif";g.fillStyle="#4a3a6a";
+  centre("Monster Book: "+discovered()+" of "+pairsOpen()+" found",cx,b.y+210);
+  centre("Coins: 🪙 "+save.coins,cx,b.y+256);
+  centre(save.tonight>=18?"Perfect night! +"+PERFECT_BONUS+" coins":"Tip: the 👻 💗 💧 numbers on two cards add up.",cx,b.y+302);
+  g.font="22px system-ui,sans-serif";
+  if(save.moonFound===d)centre("🌙 Today's Moon Recipe: found!",cx,b.y+362);
+  else{centre("🌙 Today's Moon Recipe is still hidden:",cx,b.y+352);centre(moonClue(d),cx,b.y+384);}
+  g.fillStyle="#7a6a8a";g.font="20px system-ui,sans-serif";centre("A new Moon Recipe rises every day.",cx,b.y+430);
+  drawButton(NIGHT_BTN,"Next night ▶",true,30);
+}
+function drawBook(t){
+  dim();g.fillStyle="#2a2040";rr(BOOK_BOX.x,BOOK_BOX.y,BOOK_BOX.w,BOOK_BOX.h,24);g.fill();
+  g.textAlign="left";g.fillStyle="#f3e9ff";g.font="bold 38px system-ui,sans-serif";g.fillText("📖 Monster Book",44,104);
+  g.font="22px system-ui,sans-serif";g.fillStyle="#c9b8e8";g.fillText(discovered()+" of "+PAIRS.length+" found",48,142);
+  drawButton(BOOK_CLOSE,"Close",false,24);
+  let info="Tap a monster to read about it.";
+  if(bookSel!=null){
+    const [i,j]=PAIRS[bookSel],m=monster(i,j),e=save.book[m.key];
+    info=e?(e.moon?"🌙 ":"")+m.name+": 👻"+m.st.S+" 💗"+m.st.C+" 💧"+m.st.G+" · made "+e.n+"×":j>=save.ing?"Unlock "+ING[j].name+" in the Shop to make this one.":"Not found yet. Try "+ING[i].name+" + ???";
+  }
+  g.textAlign="left";g.fillStyle="#ffe9a8";g.font="20px system-ui,sans-serif";g.fillText(info,48,184);
+  PAIRS.forEach(([i,j],q)=>{
+    const r=bookSlot(q),m=monster(i,j),e=save.book[m.key];
+    g.fillStyle=q===bookSel?"#4a3a70":"#352a50";rr(r.x,r.y,r.w,r.h,14);g.fill();
+    if(j>=save.ing){g.globalAlpha=0.4;g.fillStyle="#ffffff";g.font="30px system-ui,sans-serif";centre("🔒",r.x+r.w/2,r.y+r.h/2);g.globalAlpha=1;return;}
+    drawMonster(m,r.x+r.w/2,r.y+44,30,t,{sil:!e,moon:!!(e&&e.moon)});
+    g.fillStyle=e?"#f3e9ff":"#8a7aa8";g.font="600 14px system-ui,sans-serif";centre(e?m.name:"???",r.x+r.w/2,r.y+r.h-10);
+  });
+}
+function drawShop(){
+  const b=SHOP_BOX;
+  dim();g.fillStyle="#2a2040";rr(b.x,b.y,b.w,b.h,24);g.fill();
+  g.textAlign="left";g.fillStyle="#f3e9ff";g.font="bold 38px system-ui,sans-serif";g.fillText("🛒 Shop",b.x+28,b.y+62);
+  g.textAlign="right";g.fillStyle="#ffe9a8";g.font="bold 30px system-ui,sans-serif";g.fillText("🪙 "+save.coins,b.x+b.w-28,b.y+62);
+  shopItems().forEach((it,q)=>{
+    const r=shopRow(q),[label,ok]=shopState(it);
+    g.fillStyle="#352a50";rr(r.x,r.y,r.w,r.h,16);g.fill();
+    if(it.kind==="ing"){g.fillStyle="#ffffff";g.font="48px system-ui,sans-serif";centre(ING[it.i].icon,r.x+50,r.y+r.h/2);}
+    else drawCauldron(r.x+50,r.y+r.h/2+6,28,1,SKIN[it.id],0);
+    const name=it.kind==="ing"?ING[it.i].name:SKIN[it.id].name+" cauldron";
+    const more=it.kind==="ing"?"Adds "+it.i+" new monsters":"A new look for your pot";
+    g.textAlign="left";g.fillStyle="#f3e9ff";g.font="600 24px system-ui,sans-serif";g.fillText(name,r.x+100,r.y+44);
+    g.fillStyle="#b8a6d8";g.font="17px system-ui,sans-serif";g.fillText(more,r.x+100,r.y+76);
+    drawButton(shopBtn(q),label,ok,22);
+  });
+  drawButton(SHOP_CLOSE,"Close",false,26);
+}
+function burst(x,y,cols,count){
+  for(let k=0;k<count;k++){const a=Math.random()*Math.PI*2,v=80+Math.random()*180;parts.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v-140,life:1,col:cols[k%cols.length]});}
+  if(parts.length>300)parts.splice(0,parts.length-300);
+}
+function drawParts(dt){
+  for(const p of parts){p.life-=dt*0.7;p.vy+=260*dt;p.x+=p.vx*dt;p.y+=p.vy*dt;}
+  parts=parts.filter(p=>p.life>0);
+  for(const p of parts){g.globalAlpha=Math.max(0,Math.min(1,p.life));g.fillStyle=p.col;g.beginPath();g.arc(p.x,p.y,7,0,7);g.fill();}
+  g.globalAlpha=1;
+}
+function draw(t,dt){
+  drawBackground(W,H,t);
+  drawTop();
+  drawCustomer(t);
+  drawKitchen(t);
+  if(toast&&t<toastUntil)drawToast();
+  drawParts(dt);
+  if(phase==="result"&&result)drawResult(t);
+  else if(phase==="night")drawNight();
+  if(overlay==="book")drawBook(t);
+  else if(overlay==="shop")drawShop();
+}
+// #demo: serves customers by itself for store videos; it never saves
+function demoStep(t){
+  if(t<demoNext)return;
+  demoNext=t+0.7;
+  if(phase==="result"){if(t>=resultAt+1.6)next();return;}
+  if(phase==="night"){startNight();return;}
+  if(phase!=="kitchen")return;
+  const b=bestPair(orderNow(),save.ing,save.book).pair;
+  if(picked.length<2)pick(b[picked.length]);
+  else mash();
+}
+let lastMs=performance.now();
+function frame(ms){
+  const dt=Math.min(Math.max((ms-lastMs)/1000,0),0.1);lastMs=ms;
+  const t=now();
+  if(demo)demoStep(t);
+  if(phase==="mashing"&&t>=mashAt+0.9)resolve();
+  draw(t,dt);
+  requestAnimationFrame(frame);
+}
+
+// ---------- #cover: store and jam covers as images (right-click, Save image as) ----------
+function renderCover(cw,ch){
+  const c=document.createElement("canvas");c.width=cw;c.height=ch;
+  const keep=g;
+  try{
+    g=c.getContext("2d");
+    drawBackground(cw,ch,1);
+    const u=Math.min(cw,ch),cx=cw/2,cy=ch*0.72;
+    drawCauldron(cx,cy,u*0.22,1,SKINS[0],0.4);
+    drawMonster(monster(1,4),cx-u*0.31,cy-u*0.27,u*0.11,0.4,{});
+    drawMonster(monster(2,3),cx+u*0.31,cy-u*0.25,u*0.11,1.1,{});
+    drawMonster(monster(0,7),cx,cy-u*0.4,u*0.14,0.7,{moon:true});
+    const size=Math.round(u*0.1);
+    g.textAlign="center";g.font="bold "+size+"px system-ui,sans-serif";g.lineJoin="round";g.lineWidth=size*0.16;g.strokeStyle=INK;g.fillStyle="#ffd84a";
+    for(const [text,y] of [["Monster Mash",ch*0.14],["Kitchen",ch*0.14+size*1.08]]){g.strokeText(text,cx,y);g.fillText(text,cx,y);}
+    return c.toDataURL("image/png");
+  }finally{g=keep;}
+}
+
+// ---------- #selftest: the rules, then three nights and every screen through the real code ----------
+function selfTest(){
+  const t0=performance.now(),problems=selfTestLogic(),kept=JSON.stringify(save);
+  noSave=true;
+  try{
+    save=fresh();phase="kitchen";overlay=null;picked=[];
+    for(let night=1;night<=3;night++){
+      for(let q=0;q<6;q++){
+        draw(now(),0.016);
+        const b=bestPair(orderNow(),save.ing,save.book);
+        picked=[];pick(b.pair[0]);pick(b.pair[1]);
+        if(!mash()){problems.push("page: night "+night+" order "+(q+1)+": MASH did not start");break;}
+        draw(now()+0.3,0.1);
+        resolve();
+        if(phase!=="result"||result.stars!==3)problems.push("page: night "+night+" order "+(q+1)+" earned "+(result&&result.stars)+" stars");
+        draw(now()+1,0.1);
+        resultAt=-10;next();
+      }
+      if(phase!=="night"||save.tonight!==18)problems.push("page: night "+night+" ended with "+save.tonight+" stars");
+      draw(now(),0.1);
+      startNight();
+      if(save.night!==night+1||phase!=="kitchen")problems.push("page: night "+(night+1)+" did not start");
+    }
+    save.coins+=1000;overlay="shop";draw(now(),0.016);
+    for(const it of shopItems())buy(it);
+    if(save.ing!==10||save.skin!=="gold")problems.push("page: the shop did not sell everything");
+    overlay="book";bookSel=0;draw(now(),0.016);bookSel=44;draw(now(),0.016);overlay=null;
+    save.moonFound="";save.daily={date:"",streak:0};
+    const mp=moonPair(today());picked=[];pick(mp[0]);pick(mp[1]);mash();resolve();
+    if(!result.moon||save.daily.streak!==1)problems.push("page: the Moon Recipe was not found");
+    draw(now()+1,0.1);
+    if(!/^data:image\/png/.test(renderCover(320,320)))problems.push("page: the cover did not render");
+  }catch(err){problems.push("page: "+(err&&err.stack||err));}
+  save=JSON.parse(kept);noSave=demo;phase=save.k>=6?"night":"kitchen";overlay=null;picked=[];result=null;parts=[];
+  if(audio.started())problems.push("audio started without a click, touch or key");
+  return {problems,ms:Math.round(performance.now()-t0)};
+}
+
+fit();
+if(demo){save=fresh();document.body.classList.add("demo");}
+if(save.mute)audio.toggle();
+phase=save.k>=6?"night":"kitchen";
+if(location.hash==="#selftest"){
+  const r=selfTest(),box=document.getElementById("test");box.hidden=false;
+  box.textContent=`Monster Mash Kitchen self-test (v0.1.0): ${r.ms} ms.\n`+(r.problems.length?`${r.problems.length} problem(s):\n`+r.problems.slice(0,40).join("\n"):"No problems found.")+"\n\nClick to close.";
+  box.onclick=()=>{box.hidden=true;location.hash="";};
+  console.log("self-test:",r.problems.length,"problems",r.problems);
+}else if(coverMode){
+  const box=document.getElementById("covers");box.hidden=false;
+  box.textContent="Monster Mash Kitchen covers. Right-click each image and choose 'Save image as'.\n";
+  for(const [name,w,h] of [["square-1024",1024,1024],["portrait-720x1280",720,1280],["landscape-1280x720",1280,720]]){
+    const cap=document.createElement("div");cap.textContent="monster-mash-"+name+".png";box.appendChild(cap);
+    const img=document.createElement("img");img.alt=name;img.src=renderCover(w,h);box.appendChild(img);
+  }
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
